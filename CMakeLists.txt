@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(DX3270 VERSION 1.7.5 LANGUAGES CXX OBJCXX)
+project(DX3270 VERSION 1.7.6 LANGUAGES CXX OBJCXX)
 
 # ── Version / Build number ────────────────────────────────────────────────────
 # Override on the command line: cmake -DBUILD_NUMBER=42 ..
@@ -73,6 +73,7 @@ target_link_libraries(DX3270 PRIVATE
     "-framework Foundation"
     "-framework CoreText"
     "-framework CoreGraphics"
+    "-weak_framework UniformTypeIdentifiers"
 )
 
 target_compile_options(DX3270 PRIVATE

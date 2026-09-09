@@ -303,6 +303,19 @@ static NSColor *colorFor5250Attr(uint8_t attr) {
         return;
     }
 
+    // --- Start SCALING ---
+    NSSize pref = [self preferredSize];
+    CGFloat scaleX = self.bounds.size.width / pref.width;
+    CGFloat scaleY = self.bounds.size.height / pref.height;
+
+    [NSGraphicsContext saveGraphicsState];
+    NSAffineTransform *transform = [NSAffineTransform transform];
+    [transform scaleXBy:scaleX yBy:scaleY];
+    [transform concat];
+    
+    CGFloat effectiveHeight = pref.height;
+    // --- End SCALING ---
+
     // Draw each cell
     for (int row = 0; row < _rows; ++row) {
         for (int col = 0; col < _cols; ++col) {
@@ -335,9 +348,15 @@ static NSColor *colorFor5250Attr(uint8_t attr) {
             } else if (cell.fgColor != 0x00) {
                 // 3270 Extended Color
                 fg = colorFor3270Code(cell.fgColor) ?: _foregroundColor;
+            } else if (cell.fgColor != 0x00) {
+                // 3270 Extended Color
+                fg = colorFor3270Code(cell.fgColor) ?: _foregroundColor;
             } else {
-                // 3270 Base Color
-                int colorIdx = ((cell.attr & 0x20) >> 4) | ((cell.attr & 0x08) >> 3);
+                // 3270 Base Color - Dynamic calculation to prevent attribute bleed during scrolling
+                int faIdx = _screen->findFieldStart(pos);
+                uint8_t activeAttr = (faIdx >= 0) ? _screen->at(faIdx).attr : 0x00;
+                int colorIdx = ((activeAttr & 0x20) >> 4) | ((activeAttr & 0x08) >> 3);
+                
                 switch (colorIdx) {
                 case 1:  fg = _intensifiedColor; break;
                 case 2:  fg = [NSColor colorWithRed:0.22 green:0.52 blue:1.00 alpha:1.0]; break;
@@ -377,7 +396,7 @@ static NSColor *colorFor5250Attr(uint8_t attr) {
 
             // Calculate pixel coordinates (Y=0 is bottom in Cocoa)
             CGFloat cx = col * _charW;
-            CGFloat cy = self.bounds.size.height - (row + 1) * _charH;
+            CGFloat cy = effectiveHeight - (row + 1) * _charH;
 
             // Fill cell background when it differs from the global background
             if (bg != _backgroundColor) {
@@ -415,7 +434,7 @@ static NSColor *colorFor5250Attr(uint8_t attr) {
         int curCol = curPos % _cols;
         const x3270::Cell& curCell = _screen->at(curPos);
         CGFloat cx = curCol * _charW;
-        CGFloat cy = self.bounds.size.height - (curRow + 1) * _charH;
+        CGFloat cy = effectiveHeight - (curRow + 1) * _charH;
 
         // Block cursor: fill cell with cursor colour, then re-draw character inverted
         [_cursorColor setFill];
@@ -443,8 +462,9 @@ static NSColor *colorFor5250Attr(uint8_t attr) {
         [self drawGraphicsOverlay:cgctx];
         _graphics->clearDirty();
     }
+    // Restore the graphics context at the end of the method
+    [NSGraphicsContext restoreGraphicsState];
 }
-
 // ── GOCA Graphics Overlay ─────────────────────────────────────────────────────
 static constexpr CGFloat kGocaCellW = 9.0;  // must match AW in buildQueryReply()
 static constexpr CGFloat kGocaCellH = 12.0; // must match AH in buildQueryReply()
@@ -559,10 +579,14 @@ static constexpr CGFloat kGocaCellH = 12.0; // must match AH in buildQueryReply(
 }
 
 - (void)drawOIA {
-    CGFloat oiaY = self.bounds.size.height - (_rows + 1) * _charH;
+    CGFloat effectiveHeight = [self preferredSize].height;
+    CGFloat effectiveWidth  = [self preferredSize].width;
+    
+    CGFloat oiaY = effectiveHeight - (_rows + 1) * _charH;
+    
     // Separator line
     [[NSColor colorWithWhite:0.4 alpha:1.0] setFill];
-    NSRectFill(NSMakeRect(0, oiaY + _charH - 1, self.bounds.size.width, 1.0));
+    NSRectFill(NSMakeRect(0, oiaY + _charH - 1, effectiveWidth, 1.0));
 
     NSColor *oiaColor = [NSColor colorWithWhite:0.6 alpha:1.0];
     NSDictionary *attrs = @{
@@ -599,14 +623,14 @@ static constexpr CGFloat kGocaCellH = 12.0; // must match AH in buildQueryReply(
 
     CGFloat oiaTextY = oiaY + _baseline;
     [statusStr drawAtPoint:NSMakePoint(4, oiaTextY) withAttributes:attrs];
-    [cursorInfo drawAtPoint:NSMakePoint(self.bounds.size.width - 80, oiaTextY) withAttributes:attrs];
+    [cursorInfo drawAtPoint:NSMakePoint(effectiveWidth - 80, oiaTextY) withAttributes:attrs];
 
     // Version string drawn dimly in the lower OIA row (does not overlap status)
     static NSString *versionStr = nil;
     static dispatch_once_t vOnce;
     dispatch_once(&vOnce, ^{
         NSDictionary *info = [[NSBundle mainBundle] infoDictionary];
-        NSString *v = info[@"CFBundleShortVersionString"] ?: @"1.7.5";
+        NSString *v = info[@"CFBundleShortVersionString"] ?: @"1.7.6";
         NSString *b = info[@"CFBundleVersion"] ?: @"1";
         versionStr = [NSString stringWithFormat:@"DX3270 v%@ build %@  \u2014  \u00a9 2026 Swen Skalski", v, b];
     });
@@ -823,11 +847,16 @@ static constexpr CGFloat kGocaCellH = 12.0; // must match AH in buildQueryReply(
 - (int)offsetForPoint:(NSPoint)pt {
     if (!_screen) return -1;
     
-    int col = (int)(pt.x / _charW);
-    // Cocoa Y is bottom-up, but row 0 is at the top of the terminal grid.
-    int row = (int)((self.bounds.size.height - pt.y) / _charH);
+    NSSize pref = [self preferredSize];
+    CGFloat scaleX = self.bounds.size.width / pref.width;
+    CGFloat scaleY = self.bounds.size.height / pref.height;
     
-    // Disallow clicks outside the text area (e.g., in the OIA)
+    CGFloat realX = pt.x / scaleX;
+    CGFloat realY = pt.y / scaleY;
+    
+    int col = (int)(realX / _charW);
+    int row = (int)((pref.height - realY) / _charH);
+    
     if (col < 0 || col >= _cols || row < 0 || row >= _rows) {
         return -1;
     }
@@ -876,7 +905,6 @@ static constexpr CGFloat kGocaCellH = 12.0; // must match AH in buildQueryReply(
 }
 
 // ── Clipboard (Copy / Paste) ──────────────────────────────────────────────────
-
 - (uint8_t)ebcdicForUnichar:(unichar)c {
     // 1. Reverse-lookup using the active Code Page
     for (int i = 0; i < 256; i++) {
@@ -929,11 +957,6 @@ static constexpr CGFloat kGocaCellH = 12.0; // must match AH in buildQueryReply(
             }
         }
         
-        NSRange range = [rowText rangeOfString:@" +$" options:NSRegularExpressionSearch];
-        if (range.location != NSNotFound) {
-            [rowText deleteCharactersInRange:range];
-        }
-        
         [copiedText appendString:rowText];
         
         if (r < maxRow) {
@@ -957,21 +980,45 @@ static constexpr CGFloat kGocaCellH = 12.0; // must match AH in buildQueryReply(
         return;
     }
     
+    // Memorize the exact column where the user starts pasting
+    int startCol = 0;
+    if (_screen) {
+        startCol = _screen->cursorPos() % _cols;
+    }
+    
     for (NSUInteger i = 0; i < text.length; i++) {
         unichar c = [text characterAtIndex:i];
+        
+        // Ignore completely the 'Carriage Return' (\r) to avoid double newlines
+        // (Windows texts with \r\n will become simple \n)
+        if (c == '\r') {
+            continue;
+        }
+        
         BOOL success = NO;
         
-        // Newlines move focus to the next unprotected field
-        if (c == '\n' || c == '\r') {
-            if (_kbd) success = _kbd->handleTab(false);
-            else if (_kbd5250) success = _kbd5250->handleTab(false);
+        if (c == '\n') {
+            // Paste in Block Mode: move down one row and align precisely to the starting column, 
+            // ignoring ISPF row numbers.
+            if (_screen) {
+                int curRow = _screen->cursorPos() / _cols;
+                int nextRow = curRow + 1;
+                
+                if (nextRow < _rows) {
+                    _screen->setCursor(nextRow * _cols + startCol);
+                    success = YES;
+                } else {
+                    success = NO; // Reached the bottom of the screen
+                }
+            }
         } else {
+            // Digit the EBCDIC character normally
             uint8_t ebcdic = [self ebcdicForUnichar:c];
             if (_kbd) success = _kbd->handleEbcdicChar(ebcdic);
             else if (_kbd5250) success = _kbd5250->handleEbcdicChar(ebcdic);
         }
         
-        // Stop pasting if we hit a protected field, OErr, or keyboard lock
+        // Stop the paste (and emit a beep) if we hit a protected field or the end of the screen
         if (!success) {
             NSBeep();
             break;

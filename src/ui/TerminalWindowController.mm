@@ -1,3 +1,4 @@
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import "TerminalWindowController.h"
 #import "TerminalView.h"
 #import "DebugWindowController.h"
@@ -364,7 +365,14 @@
 /// Save a PNG screenshot of the terminal view to a user-chosen file (⌘⇧P).
 - (IBAction)saveScreenshot:(id)sender {
     NSSavePanel *panel = [NSSavePanel savePanel];
-    panel.allowedFileTypes = @[@"png"];
+    if (@available(macOS 11.0, *)) {
+        panel.allowedContentTypes = @[UTTypePNG];
+    } else {
+    #pragma clang diagnostic push
+    #pragma clang diagnostic ignored "-Wdeprecated-declarations"
+        panel.allowedFileTypes = @[@"png"];
+    #pragma clang diagnostic pop
+    }
     panel.nameFieldStringValue = @"DX3270_screenshot.png";
     panel.message = @"Save a PNG image of the current terminal screen.";
 
@@ -414,7 +422,14 @@
     }
 
     NSSavePanel *panel = [NSSavePanel savePanel];
-    panel.allowedFileTypes = @[@"txt"];
+    if (@available(macOS 11.0, *)) {
+        panel.allowedContentTypes = @[UTTypePlainText];
+    } else {
+    #pragma clang diagnostic push
+    #pragma clang diagnostic ignored "-Wdeprecated-declarations"
+        panel.allowedFileTypes = @[@"txt"];
+    #pragma clang diagnostic pop
+    }
     panel.nameFieldStringValue = @"DX3270_export.txt";
     panel.message = @"Export the current terminal screen as plain text.";
 

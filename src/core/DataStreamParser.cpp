@@ -140,6 +140,11 @@ void DataStreamParser::processRecord(const std::vector<uint8_t>& record) {
 
 // ── Command dispatch ──────────────────────────────────────────────────────────
 void DataStreamParser::handleCommand(uint8_t cmd) {
+    // Reset extended attributes at the beginning of each host command (IBM 3270 Specification)
+    screen_.setCurrentFgColor(0x00);
+    screen_.setCurrentBgColor(0x00);
+    screen_.setCurrentHighlight(0x00);
+
     switch (cmd) {
     case CMD_WRITE:
     case CMD_WRITE_SNA:
