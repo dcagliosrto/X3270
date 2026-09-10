@@ -52,6 +52,15 @@
                         action:@selector(newConnection:)
                  keyEquivalent:@"n"];
     [fileMenu addItem:[NSMenuItem separatorItem]];
+
+    NSMenuItem *transferItem =
+        [fileMenu addItemWithTitle:@"z/OS File Transfer Dock…"
+                            action:@selector(openTransferDock:)
+                     keyEquivalent:@"U"];   // ⌘⇧U
+    transferItem.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagShift;
+    
+    [fileMenu addItem:[NSMenuItem separatorItem]];
+
     NSMenuItem *screenshotItem =
         [fileMenu addItemWithTitle:@"Save Screenshot…"
                             action:@selector(saveScreenshot:)
@@ -116,6 +125,13 @@
 
 - (void)openShortcuts:(id)sender {
     [[ShortcutsWindowController sharedController] showWindow:nil];
+}
+
+- (void)openTransferDock:(id)sender {
+    NSWindowController *activeWC = NSApp.keyWindow.windowController;
+    if ([activeWC respondsToSelector:@selector(toggleTransferSidebar:)]) {
+        [activeWC performSelector:@selector(toggleTransferSidebar:) withObject:sender];
+    }
 }
 
 @end

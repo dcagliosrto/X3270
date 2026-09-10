@@ -43,6 +43,7 @@ set(UI_SOURCES
     src/ui/TerminalWindowController.mm
     src/ui/PreferencesWindowController.mm
     src/ui/ShortcutsWindowController.mm
+    src/ui/TransferDockViewController.mm
 )
 
 # ── App Bundle ────────────────────────────────────────────────────────────────

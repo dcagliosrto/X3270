@@ -1,5 +1,6 @@
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import "TerminalWindowController.h"
+#import "TransferDockViewController.h"
 #import "TerminalView.h"
 #import "DebugWindowController.h"
 #include "ITerminalSession.h"
@@ -18,11 +19,14 @@
 #include <string>
 
 @interface TerminalWindowController () <NSWindowDelegate>
+@property (nonatomic, strong) NSSplitViewController *splitViewController;
+@property (nonatomic, strong) NSSplitViewItem *sidebarSplitItem;
 @end
 
 @implementation TerminalWindowController {
     TerminalView*   _termView;
     DebugWindowController *_debugWC;
+    TransferDockViewController *_transferDockVC;
 
     // Core engine objects
     std::unique_ptr<x3270::ScreenBuffer>          _screen;
@@ -97,6 +101,18 @@
     if (_session) _session->disconnect();
     if (_networkThread.joinable()) _networkThread.detach();
     _debugWC = nil;
+}
+
+- (void)toggleTransferSidebar:(id)sender {
+    if (!self.sidebarSplitItem) return;
+    
+    [NSAnimationContext runAnimationGroup:^(NSAnimationContext *context) {
+        context.duration = 0.25; // macOS native animation duration
+        self.sidebarSplitItem.animator.collapsed = !self.sidebarSplitItem.isCollapsed;
+    } completionHandler:^{
+        // Notify the terminal view to recalculate the AffineTransform
+        [self->_termView setNeedsDisplay:YES];
+    }];
 }
 
 - (void)userDefaultsDidChange:(NSNotification *)note {
@@ -288,7 +304,7 @@
 
 // ── UI ────────────────────────────────────────────────────────────────────────
 - (void)buildUI {
-    _termView = [[TerminalView alloc] initWithFrame:self.window.contentView.bounds];
+    _termView = [[TerminalView alloc] initWithFrame:NSMakeRect(0, 0, 640, 420)];
     _termView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     [_termView setCodePage:_codePage];
 
@@ -300,17 +316,39 @@
         [_termView setScreenBuffer:_screen.get() keyboardState5250:_kbd5250.get()];
     }
 
-    [self.window.contentView addSubview:_termView];
-    [self.window makeFirstResponder:_termView];
+    // Setup for the SplitView containing the terminal and the transfer dock
+    NSViewController *terminalVC = [[NSViewController alloc] init];
+    terminalVC.view = _termView;
 
-    // Resize window to fit preferred terminal size
+    _transferDockVC = [[TransferDockViewController alloc] init];
+    _transferDockVC.currentHost = _host;
+
+    self.splitViewController = [[NSSplitViewController alloc] init];
+
+    // Principal terminal: flexible, takes priority in resizing
+    NSSplitViewItem *mainItem = [NSSplitViewItem splitViewItemWithViewController:terminalVC];
+    mainItem.holdingPriority = 200; // Priorità bassa: assorbe tutto il ridimensionamento della finestra
+
+    // Transfer Dock  
+    self.sidebarSplitItem = [NSSplitViewItem splitViewItemWithViewController:_transferDockVC];
+    self.sidebarSplitItem.holdingPriority = 260; // Priorità alta: rimane fissa sui resize
+    self.sidebarSplitItem.canCollapse = YES;
+    self.sidebarSplitItem.collapsed = YES; // Nascosta di default all'avvio
+    
+    // Lock the width using the SplitView rules
+    self.sidebarSplitItem.minimumThickness = 280;
+    //self.sidebarSplitItem.maximumThickness = 280;
+
+    [self.splitViewController addSplitViewItem:mainItem];
+    [self.splitViewController addSplitViewItem:self.sidebarSplitItem];
+
+    // Assign the SplitViewController to the window
+    self.window.contentViewController = self.splitViewController;
+
+    // Initial size based solely on the terminal grid
     NSSize preferred = [_termView preferredSize];
-    NSRect frame = self.window.frame;
-    NSRect contentFrame = [self.window contentRectForFrameRect:frame];
-    CGFloat widthDiff  = frame.size.width  - contentFrame.size.width;
-    CGFloat heightDiff = frame.size.height - contentFrame.size.height;
     [self.window setContentSize:preferred];
-    (void)widthDiff; (void)heightDiff;
+    [self.window makeFirstResponder:_termView];
 }
 
 // ── Networking ────────────────────────────────────────────────────────────────
