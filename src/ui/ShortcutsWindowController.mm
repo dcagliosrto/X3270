@@ -96,6 +96,14 @@
     ROW(@"Insert / Help / ⌘ I", @"Toggle insert mode (characters shift right)");
     ROW(@"Option + Delete",    @"Erase to End of Field — clears from cursor to end");
 
+    SECTION(@"Clipboard");
+    ROW(@"⌘ C",                @"Copy — copy selected text to clipboard");
+    ROW(@"⌘ V",                @"Paste — paste text from clipboard");
+    ROW(@"⌘ X",                @"Cut — remove selected text and copy to clipboard");
+
+    SECTION(@"Transfer Dock");
+    ROW(@"⌘ ⇧ U",             @"Transfer Dock — show/hide Transfer dock window");
+
     SECTION(@"Application");
     ROW(@"⌘ N",                @"New Connection — open a new Connect dialog");
     ROW(@"⌘ ,",                @"Preferences — font and display settings");

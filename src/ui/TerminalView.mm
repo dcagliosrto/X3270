@@ -216,12 +216,19 @@ static NSColor *colorFor5250Attr(uint8_t attr) {
 }
 
 - (void)userDefaultsDidChange:(NSNotification *)note {
+    // Save the expected size before recalculating
+    NSSize oldPref = [self preferredSize];
+
     [self applyFontFromPreferences];
     _codec.setHerculesBrackets([[NSUserDefaults standardUserDefaults] boolForKey:kPrefHerculesBrackets]);
     [self recalcCellSize];
     [self setNeedsDisplay:YES];
-    // Resize the window to the new preferred size (cell dimensions may have changed)
-    [self.window setContentSize:[self preferredSize]];
+
+    // Resize the window ONLY if the font (and therefore the grid) has changed
+    NSSize newPref = [self preferredSize];
+    if (!NSEqualSizes(oldPref, newPref)) {
+        [self.window setContentSize:newPref];
+    }
 }
 
 - (void)dealloc {
@@ -640,7 +647,8 @@ static constexpr CGFloat kGocaCellH = 12.0; // must match AH in buildQueryReply(
         NSForegroundColorAttributeName: dimColor,
     };
     NSSize vSize = [versionStr sizeWithAttributes:dimAttrs];
-    CGFloat vX = floor((self.bounds.size.width - vSize.width) / 2.0);
+    // Use the effectiveWidth to center the string relative to the terminal grid!
+    CGFloat vX = floor((effectiveWidth - vSize.width) / 2.0);
     [versionStr drawAtPoint:NSMakePoint(vX, _baseline) withAttributes:dimAttrs];
 }
 

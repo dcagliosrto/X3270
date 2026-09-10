@@ -30,4 +30,7 @@
 /// Export the current screen content as a UTF-8 plain-text file.
 - (IBAction)exportText:(id)sender;
 
+/// Toggle the visibility of the transfer sidebar.
+- (void)toggleTransferSidebar:(id)sender;
+
 @end
