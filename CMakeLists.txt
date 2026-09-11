@@ -45,6 +45,7 @@ set(UI_SOURCES
     src/ui/ShortcutsWindowController.mm
     src/ui/TransferDockViewController.mm
     src/ui/CommandDockViewController.mm
+    src/ui/OOBPopoverViewController.mm
 )
 
 # ── App Bundle ────────────────────────────────────────────────────────────────
@@ -104,6 +105,16 @@ set_source_files_properties(resources/AppIcon.icns PROPERTIES
 )
 set_target_properties(DX3270 PROPERTIES
     MACOSX_BUNDLE_ICON_FILE "AppIcon"
+)
+
+# ── JSON Resources ────────────────────────────────────────────────────────────
+set(JSON_RESOURCES
+    resources/commands.json
+    resources/panel_rules.json
+)
+target_sources(DX3270 PRIVATE ${JSON_RESOURCES})
+set_source_files_properties(${JSON_RESOURCES} PROPERTIES
+    MACOSX_PACKAGE_LOCATION "Resources"
 )
 
 # ── Compile .mm files as Objective-C++ with ARC ──────────────────────────────

@@ -27,6 +27,10 @@ static NSString * const kDX3270BroadcastOOBNotification  = @"DX3270BroadcastOOBN
 @interface TerminalWindowController () <NSWindowDelegate, CommandDockDelegate>
 @property (nonatomic, strong) NSSplitViewController *splitViewController;
 @property (nonatomic, strong) NSSplitViewItem *sidebarSplitItem;
+
+- (NSString *)getPasswordForUser:(NSString *)user host:(NSString *)host;
+- (void)savePasswordToKeychain:(NSString *)password forUser:(NSString *)user host:(NSString *)host;
+- (NSString *)promptForPasswordForUser:(NSString *)user host:(NSString *)host;
 @end
 
 @implementation TerminalWindowController {
@@ -303,13 +307,15 @@ static NSString * const kDX3270BroadcastOOBNotification  = @"DX3270BroadcastOOBN
     });
 }
 
-// Fetches the saved password from macOS Keychain used by Transfer Dock
-- (NSString *)getPasswordForUser:(NSString *)user {
-    if (!user || user.length == 0) return nil;
+// Fetches the saved password from macOS Keychain mapped to both User and Host
+- (NSString *)getPasswordForUser:(NSString *)user host:(NSString *)host {
+    if (!user || user.length == 0 || !host || host.length == 0) return nil;
+    
+    NSString *serviceName = [NSString stringWithFormat:@"DX3270_Mainframe_%@", host];
     
     NSDictionary *query = @{
         (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
-        (__bridge id)kSecAttrService: @"DX3270_Mainframe_Transfer",
+        (__bridge id)kSecAttrService: serviceName,
         (__bridge id)kSecAttrAccount: user,
         (__bridge id)kSecReturnData: @YES,
         (__bridge id)kSecMatchLimit: (__bridge id)kSecMatchLimitOne
@@ -321,6 +327,56 @@ static NSString * const kDX3270BroadcastOOBNotification  = @"DX3270BroadcastOOBN
         return [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
     }
     return nil;
+}
+
+- (void)savePasswordToKeychain:(NSString *)password forUser:(NSString *)user host:(NSString *)host {
+    if (!user.length || !password.length || !host.length) return;
+    
+    NSString *serviceName = [NSString stringWithFormat:@"DX3270_Mainframe_%@", host];
+    NSData *passData = [password dataUsingEncoding:NSUTF8StringEncoding];
+    
+    NSDictionary *query = @{
+        (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
+        (__bridge id)kSecAttrService: serviceName,
+        (__bridge id)kSecAttrAccount: user
+    };
+    
+    SecItemDelete((__bridge CFDictionaryRef)query);
+    
+    NSMutableDictionary *attributes = [query mutableCopy];
+    attributes[(__bridge id)kSecValueData] = passData;
+    
+    SecItemAdd((__bridge CFDictionaryRef)attributes, NULL);
+}
+
+- (NSString *)promptForPasswordForUser:(NSString *)user host:(NSString *)host {
+    __block NSString *enteredPassword = nil;
+    
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        NSAlert *alert = [[NSAlert alloc] init];
+        alert.messageText = [NSString stringWithFormat:@"Autenticazione SSH OOB per %@", host];
+        alert.informativeText = [NSString stringWithFormat:@"Inserisci la password SSH per l'utente '%@':", user];
+        alert.alertStyle = NSAlertStyleInformational;
+        
+        NSSecureTextField *input = [[NSSecureTextField alloc] initWithFrame:NSMakeRect(0, 0, 260, 24)];
+        alert.accessoryView = input;
+        
+        [alert addButtonWithTitle:@"OK"];
+        [alert addButtonWithTitle:@"Annulla"];
+        
+        [alert.window makeFirstResponder:input];
+        
+        NSModalResponse response = [alert runModal];
+        if (response == NSAlertFirstButtonReturn) {
+            enteredPassword = input.stringValue;
+        }
+    });
+    
+    if (enteredPassword.length > 0) {
+        [self savePasswordToKeychain:enteredPassword forUser:user host:host];
+    }
+    
+    return enteredPassword;
 }
 
 // ── UI ────────────────────────────────────────────────────────────────────────
@@ -642,46 +698,166 @@ static NSString * const kDX3270BroadcastOOBNotification  = @"DX3270BroadcastOOBN
 - (void)executeOutOdBandCommandLocally:(NSString *)command {
     if (!command || command.length == 0) return;
     
-    NSString *targetHost = _host;
+    NSString *trimmedCmd = [command stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    
+    // Identify the saved z/OS user or use the default environment user
     NSString *savedUser = [[NSUserDefaults standardUserDefaults] stringForKey:@"DX3270_TransferUser"];
-    if (savedUser.length > 0) {
-        targetHost = [NSString stringWithFormat:@"%@@%@", savedUser, _host];
+    if (!savedUser || savedUser.length == 0) {
+        savedUser = NSUserName(); // Fallback to the local macOS/z/OS user
     }
     
-    NSString *savedPassword = [self getPasswordForUser:savedUser];
-    
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        NSTask *task = [[NSTask alloc] init];
-        NSPipe *pipe = [NSPipe pipe];
-        task.standardOutput = pipe;
-        task.standardError = pipe;
+        // 1. Look for the password in the Keychain for this specific host
+        NSString *savedPassword = [self getPasswordForUser:savedUser host:self->_host];
         
-        if (savedPassword.length > 0) {
+        // 2. If missing, show the native prompt to ask for it and save it in the Keychain
+        if (!savedPassword || savedPassword.length == 0) {
+            savedPassword = [self promptForPasswordForUser:savedUser host:self->_host];
+            if (!savedPassword || savedPassword.length == 0) {
+                return; // The user canceled the input
+            }
+        }
+        
+        NSString *targetHost = [NSString stringWithFormat:@"%@@%@", savedUser, self->_host];
+        
+        // ==========================================
+        // Handle LOG <jobid>
+        // ==========================================
+// ==========================================
+        // Handle LOG <jobid> (Intercettato dal JSON come DX3270_INTERNAL_LOG)
+        // ==========================================
+        if ([trimmedCmd.uppercaseString hasPrefix:@"DX3270_INTERNAL_LOG "]) {
+            // Extract the jobTarget by bypassing the 20-character prefix ("DX3270_INTERNAL_LOG ")
+            NSString *jobTarget = [[trimmedCmd substringFromIndex:20] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];            if (jobTarget.length == 0) {
+                dispatch_async(dispatch_get_main_queue(), ^{ NSBeep(); });
+                return;
+            }
+
+            NSTask *task = [[NSTask alloc] init];
+            NSPipe *pipe = [NSPipe pipe];
+            task.standardOutput = pipe;
+            task.standardError = pipe;
+
             task.launchPath = @"/usr/bin/expect";
             NSMutableDictionary *env = [[NSProcessInfo processInfo].environment mutableCopy];
             env[@"SSH_PASS"] = savedPassword;
             task.environment = env;
             task.arguments = @[@"-"];
-            
+
             NSPipe *inputPipe = [NSPipe pipe];
             task.standardInput = inputPipe;
-            
+
+            // 1. Scrive lo script REXX su un file temporaneo LOCALE del Mac, bypassando i limiti z/OS
+            NSString *rexxScript = [NSString stringWithFormat:
+                @"/* REXX */\n"
+                 "parse arg target\n"
+                 "rc=isfcalls('ON')\n"
+                 "isfprefix='*'\n"
+                 "isfowner='*'\n"
+                 "isflinelim=20000\n"
+                 "address SDSF 'ISFEXEC ST'\n"
+                 "say '===SPOOL_START==='\n"
+                 "if symbol('ISFROWS') = 'VAR' then do i=1 to ISFROWS\n"
+                 "  if JOBID.i = target then do\n"
+                 "    address SDSF 'ISFBROWSE ST TOKEN(''' || TOKEN.i || ''')'\n"
+                 "    if symbol('ISFLINE.0') = 'VAR' then do j=1 to isfline.0\n"
+                 "      say isfline.j\n"
+                 "    end\n"
+                 "    leave\n"
+                 "  end\n"
+                 "end\n"
+                 "say '===SPOOL_END==='\n"
+                 "rc=isfcalls('OFF')\n"];
+                 
+            NSString *localRexxPath = [NSString stringWithFormat:@"/tmp/dx_local_%@.rexx", jobTarget];
+            [rexxScript writeToFile:localRexxPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
+
+            // 2. Crea la pipeline bash: esegue un "cat" locale e lo inietta via SSH 
+            // per la scrittura ed esecuzione remota sicura
+            NSString *remoteRexxPath = [NSString stringWithFormat:@"/tmp/dx_rem_%@.rexx", jobTarget];
+            NSString *shCmd = [NSString stringWithFormat:@"cat %@ | ssh %@ 'cat > %@ && chmod +x %@ && %@ %@ ; rm -f %@'", 
+                               localRexxPath, targetHost, remoteRexxPath, remoteRexxPath, remoteRexxPath, jobTarget, remoteRexxPath];
+
             NSMutableString *script = [NSMutableString string];
-            [script appendString:@"set timeout 15\n"];
-            [script appendFormat:@"spawn ssh %@ %@\n", targetHost, command];
+            [script appendString:@"set timeout 30\n"];
+            // Usiamo le { } di Expect per proteggere l'intero comando shCmd
+            [script appendFormat:@"spawn sh -c {%@}\n", shCmd];
             [script appendString:@"expect {\n"];
             [script appendString:@"  \"*yes/no*\" { send \"yes\\r\"; exp_continue }\n"];
             [script appendString:@"  \"*assword:*\" { send \"$env(SSH_PASS)\\r\"; exp_continue }\n"];
             [script appendString:@"  eof\n"];
             [script appendString:@"}\n"];
-            
+
             NSData *inputData = [script dataUsingEncoding:NSUTF8StringEncoding];
             [inputPipe.fileHandleForWriting writeData:inputData];
             [inputPipe.fileHandleForWriting closeFile];
-        } else {
-            task.launchPath = @"/usr/bin/ssh";
-            task.arguments = @[@"-o", @"BatchMode=yes", targetHost, command];
+
+            if ([task launchAndReturnError:nil]) {
+                // LETTURA PRIMA DEL WAIT: Evita il deadlock dell'app su Spool superiori a 64KB!
+                NSData *data = [pipe.fileHandleForReading readDataToEndOfFile];
+                [task waitUntilExit];
+                
+                // Rimuove il file temporaneo Mac dal disco locale
+                [[NSFileManager defaultManager] removeItemAtPath:localRexxPath error:nil];
+                
+                NSString *rawContent = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+
+                NSString *cleanLog = rawContent;
+                NSRange startRange = [rawContent rangeOfString:@"===SPOOL_START==="];
+                NSRange endRange   = [rawContent rangeOfString:@"===SPOOL_END==="];
+
+                if (startRange.location != NSNotFound && endRange.location != NSNotFound && endRange.location > startRange.location) {
+                    NSUInteger start = startRange.location + startRange.length;
+                    NSUInteger length = endRange.location - start;
+                    cleanLog = [rawContent substringWithRange:NSMakeRange(start, length)];
+                }
+
+                cleanLog = [cleanLog stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+
+                if (cleanLog.length == 0) {
+                    cleanLog = [NSString stringWithFormat:@"No spool output found for job %@.\n\nRaw Output:\n%@", jobTarget, rawContent];
+                }
+
+                NSString *filePath = [NSString stringWithFormat:@"/tmp/DX3270_%@.log", jobTarget];
+                [cleanLog writeToFile:filePath atomically:YES encoding:NSUTF8StringEncoding error:nil];
+
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    NSURL *fileURL = [NSURL fileURLWithPath:filePath];
+                    [[NSWorkspace sharedWorkspace] openURL:fileURL];
+                });
+            }
+            return;
         }
+        
+        // ==========================================
+        // Handle Generic OOB Execution
+        // ==========================================
+        NSTask *task = [[NSTask alloc] init];
+        NSPipe *pipe = [NSPipe pipe];
+        task.standardOutput = pipe;
+        task.standardError = pipe;
+        
+        task.launchPath = @"/usr/bin/expect";
+        NSMutableDictionary *env = [[NSProcessInfo processInfo].environment mutableCopy];
+        env[@"SSH_PASS"] = savedPassword;
+        task.environment = env;
+        task.arguments = @[@"-"];
+        
+        NSPipe *inputPipe = [NSPipe pipe];
+        task.standardInput = inputPipe;
+        
+        NSMutableString *script = [NSMutableString string];
+        [script appendString:@"set timeout 15\n"];
+        [script appendFormat:@"spawn ssh %@ %@\n", targetHost, command];
+        [script appendString:@"expect {\n"];
+        [script appendString:@"  \"*yes/no*\" { send \"yes\\r\"; exp_continue }\n"];
+        [script appendString:@"  \"*assword:*\" { send \"$env(SSH_PASS)\\r\"; exp_continue }\n"];
+        [script appendString:@"  eof\n"];
+        [script appendString:@"}\n"];
+        
+        NSData *inputData = [script dataUsingEncoding:NSUTF8StringEncoding];
+        [inputPipe.fileHandleForWriting writeData:inputData];
+        [inputPipe.fileHandleForWriting closeFile];
         
         NSError *error = nil;
         if ([task launchAndReturnError:&error]) {
@@ -707,11 +883,12 @@ static NSString * const kDX3270BroadcastOOBNotification  = @"DX3270BroadcastOOBN
             cleanOutput = [cleanOutput stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
 
             dispatch_async(dispatch_get_main_queue(), ^{
-                NSAlert *alert = [[NSAlert alloc] init];
-                alert.messageText = [NSString stringWithFormat:@"OOB Result [%@]: %@", self->_host, command];
-                alert.informativeText = cleanOutput.length > 0 ? cleanOutput : @"(Command executed successfully with no output)";
-                alert.alertStyle = NSAlertStyleInformational;
-                [alert runModal];
+                NSString *title = [NSString stringWithFormat:@"OOB Result [%@]: %@", self->_host, command];
+                NSString *content = cleanOutput.length > 0 ? cleanOutput : @"(Command executed successfully with no output)";
+                
+                if (self.commandDock) {
+                    [self.commandDock showOOBPopoverWithTitle:title content:content];
+                }
             });
         }
     });

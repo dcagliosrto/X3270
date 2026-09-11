@@ -53,6 +53,9 @@
 @property (nonatomic, strong) NSButton      *actionButton;
 @property (nonatomic, strong) NSTask        *currentTask;
 @property (nonatomic, copy)   NSString      *zowePath;
+
+- (void)savePasswordToKeychain:(NSString *)password forUser:(NSString *)user;
+- (void)loadPasswordFromKeychainForUser:(NSString *)user;
 @end
 
 @implementation TransferDockViewController
@@ -268,10 +271,13 @@
 - (void)savePasswordToKeychain:(NSString *)password forUser:(NSString *)user {
     if (!user.length || !password.length) return;
     
+    NSString *host = self.currentHost ?: @"localhost";
+    NSString *serviceName = [NSString stringWithFormat:@"DX3270_Mainframe_%@", host];
+    
     NSData *passData = [password dataUsingEncoding:NSUTF8StringEncoding];
     NSDictionary *query = @{
         (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
-        (__bridge id)kSecAttrService: @"DX3270_Mainframe_Transfer",
+        (__bridge id)kSecAttrService: serviceName,
         (__bridge id)kSecAttrAccount: user
     };
     
@@ -283,12 +289,45 @@
     SecItemAdd((__bridge CFDictionaryRef)attributes, NULL);
 }
 
+- (NSString *)promptForPasswordForUser:(NSString *)user host:(NSString *)host {
+    __block NSString *enteredPassword = nil;
+    
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        NSAlert *alert = [[NSAlert alloc] init];
+        alert.messageText = [NSString stringWithFormat:@"Autenticazione SSH OOB per %@", host];
+        alert.informativeText = [NSString stringWithFormat:@"Inserisci la password SSH per l'utente '%@':", user];
+        alert.alertStyle = NSAlertStyleInformational;
+        
+        NSSecureTextField *input = [[NSSecureTextField alloc] initWithFrame:NSMakeRect(0, 0, 260, 24)];
+        alert.accessoryView = input;
+        
+        [alert addButtonWithTitle:@"OK"];
+        [alert addButtonWithTitle:@"Annulla"];
+        
+        [alert.window makeFirstResponder:input];
+        
+        NSModalResponse response = [alert runModal];
+        if (response == NSAlertFirstButtonReturn) {
+            enteredPassword = input.stringValue;
+        }
+    });
+    
+    if (enteredPassword.length > 0) {
+        [self savePasswordToKeychain:enteredPassword forUser:user];
+    }
+    
+    return enteredPassword;
+}
+
 - (void)loadPasswordFromKeychainForUser:(NSString *)user {
     if (!user.length) return;
     
+    NSString *host = self.currentHost ?: @"localhost";
+    NSString *serviceName = [NSString stringWithFormat:@"DX3270_Mainframe_%@", host];
+    
     NSDictionary *query = @{
         (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
-        (__bridge id)kSecAttrService: @"DX3270_Mainframe_Transfer",
+        (__bridge id)kSecAttrService: serviceName,
         (__bridge id)kSecAttrAccount: user,
         (__bridge id)kSecReturnData: @YES,
         (__bridge id)kSecMatchLimit: (__bridge id)kSecMatchLimitOne

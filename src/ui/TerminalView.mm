@@ -144,6 +144,7 @@ static NSColor *colorFor5250Attr(uint8_t attr) {
 
     NSTimer* _cursorTimer;
     BOOL     _cursorVisible;
+    NSArray<NSDictionary *> *_panelRules;
 
     int      _rows;    // character grid rows (mirrors _screen->rows())
     int      _cols;    // character grid cols (mirrors _screen->cols())
@@ -183,6 +184,24 @@ static NSColor *colorFor5250Attr(uint8_t attr) {
                                                       selector:@selector(blinkCursor:)
                                                       userInfo:nil
                                                        repeats:YES];
+
+        // Load context rules from JSON
+        NSString *rulesPath = [[NSBundle mainBundle] pathForResource:@"panel_rules" ofType:@"json"];
+        if (rulesPath) {
+            NSData *data = [NSData dataWithContentsOfFile:rulesPath];
+            if (data) {
+                _panelRules = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+            }
+        }
+        
+        // Failsafe fallback
+        if (!_panelRules) {
+            _panelRules = @[
+                @{@"keywords": @[@"STATUS", @"HELD", @"DISPLAY ACTIVE", @"OUTPUT DISPLAY", @"INPUT QUEUE"], @"action": @"?"},
+                @{@"keywords": @[@"JOB DATA SET", @"DS DISPLAY"], @"action": @"S"}
+            ];
+        }
+
 
         // React to preference changes made in the Preferences window
         [[NSNotificationCenter defaultCenter]
@@ -904,7 +923,143 @@ static constexpr CGFloat kGocaCellH = 12.0; // must match AH in buildQueryReply(
 }
 
 - (void)mouseUp:(NSEvent *)event {
-    // If it was just a click with no drag, clear the selection block
+    if (!_screen) return;
+
+    // ── 1. Double-Click Handler ──────────────────────────────────────────────
+    if (event.clickCount == 2) {
+        NSPoint pt = [self convertPoint:[event locationInWindow] fromView:nil];
+        int offset = [self offsetForPoint:pt];
+        
+        if (offset >= 0) {
+            int row = offset / _cols;
+            int col = offset % _cols;
+            
+            // Step A: Determine word boundaries around the clicked cell
+            int startCol = col;
+            while (startCol > 0) {
+                const x3270::Cell& c = _screen->at(row * _cols + (startCol - 1));
+                if (c.isFA || c.ch == 0x00 || c.ch == x3270::EbcdicCodec::EBCDIC_SPACE) break;
+                startCol--;
+            }
+            
+            int endCol = col;
+            while (endCol < _cols - 1) {
+                const x3270::Cell& c = _screen->at(row * _cols + (endCol + 1));
+                if (c.isFA || c.ch == 0x00 || c.ch == x3270::EbcdicCodec::EBCDIC_SPACE) break;
+                endCol++;
+            }
+            
+            // Step B: Visually highlight the entire double-clicked word for Copy/Paste
+            _selStart = row * _cols + startCol;
+            _selEnd   = row * _cols + endCol;
+            [self setNeedsDisplay:YES];
+            
+            // Step C: Extract the UTF-16 string token from EBCDIC cells
+            NSMutableString *extractedToken = [NSMutableString string];
+            for (int c = startCol; c <= endCol; c++) {
+                const x3270::Cell& cell = _screen->at(row * _cols + c);
+                uint16_t uc = _codec.toUnicode(cell.ch);
+                if (uc >= 0x20) {
+                    [extractedToken appendFormat:@"%C", (unichar)uc];
+                }
+            }
+            
+            NSString *token = [extractedToken stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+            
+            if (token.length > 0) {
+                // CASE 1: Dataset Pattern (e.g., QUAL.DATASET.NAME or DATASET(MEMBER)) -> Open ISPF 3.4
+                if ([token containsString:@"."] || [token containsString:@"("]) {
+                    NSString *targetCmd = [NSString stringWithFormat:@"=3.4 %@", token];
+                    NSWindowController *wc = self.window.windowController;
+                    if ([wc respondsToSelector:@selector(executeISPFCommandLocally:)]) {
+                        [wc performSelector:@selector(executeISPFCommandLocally:) withObject:targetCmd];
+                        return;
+                    }
+                }
+                
+                // CASE 2: SDSF / ISPF Context-Aware Actions for Data Rows (row >= 3)
+                if (row >= 3) {
+                    // Extract panel header text (rows 0 to 2) to evaluate panel type
+                    NSMutableString *headerText = [NSMutableString string];
+                    for (int r = 0; r < MIN(3, _rows); r++) {
+                        for (int c = 0; c < _cols; c++) {
+                            const x3270::Cell& cell = _screen->at(r * _cols + c);
+                            if (!cell.isFA) {
+                                uint16_t uc = _codec.toUnicode(cell.ch);
+                                if (uc >= 0x20) [headerText appendFormat:@"%C", (unichar)uc];
+                                else [headerText appendString:@" "];
+                            } else {
+                                [headerText appendString:@" "];
+                            }
+                        }
+                    }
+                    NSString *upperHeader = headerText.uppercaseString;
+                    
+                    // Match header text against panel_rules.json to select action ('?' or 'S')
+                    char actionChar = 'S'; // Default fallback action
+                    
+                    if (_panelRules) {
+                        for (NSDictionary *rule in _panelRules) {
+                            NSArray<NSString *> *keywords = rule[@"keywords"];
+                            NSString *ruleAction = rule[@"action"];
+                            BOOL matched = NO;
+                            
+                            for (NSString *kw in keywords) {
+                                if ([upperHeader containsString:kw.uppercaseString]) {
+                                    matched = YES;
+                                    break;
+                                }
+                            }
+                            
+                            if (matched && ruleAction.length > 0) {
+                                actionChar = [ruleAction characterAtIndex:0];
+                                break;
+                            }
+                        }
+                    }
+                    
+                    // Dynamically locate the NP/action field (first unprotected cell on target row)
+                    int npOffset = -1;
+                    for (int c = 0; c < _cols; c++) {
+                        int pos = row * _cols + c;
+                        const x3270::Cell& cell = _screen->at(pos);
+                        if (cell.isFA) continue;
+                        
+                        int faIdx = _screen->findFieldStart(pos);
+                        if (faIdx >= 0) {
+                            uint8_t attr = _screen->at(faIdx).attr;
+                            bool isProtected = (attr & 0x20) != 0; // Bit 2: 1 = Protected
+                            if (!isProtected) {
+                                npOffset = pos;
+                                break;
+                            }
+                        }
+                    }
+                    
+                    // Position cursor, send the dynamic action character, and execute ENTER
+                    if (npOffset >= 0) {
+                        _screen->setCursor(npOffset);
+                        
+                        if (_kbd) {
+                            _kbd->handleChar(actionChar);
+                            _kbd->handleEnter();
+                            [self setNeedsDisplay:YES];
+                            return;
+                        } else if (_kbd5250) {
+                            _kbd5250->handleChar(actionChar);
+                            _kbd5250->handleEnter();
+                            [self setNeedsDisplay:YES];
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+        return;
+    }
+
+    // ── 2. Single-Click Handler ──────────────────────────────────────────────
+    // Clear active selection range if user clicked without dragging
     if (_selStart == _selEnd) {
         _selStart = -1;
         _selEnd = -1;
