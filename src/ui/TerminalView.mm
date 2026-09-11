@@ -13,6 +13,9 @@ NSString * const kPref3270FontEnabled = @"use3270Font";
 /// still use the canonical CP037 0xBA/0xBB so the host can store them.
 NSString * const kPrefHerculesBrackets = @"herculesBrackets";
 
+/// NSUserDefaults key – BOOL; YES = show the crosshair ruler
+NSString * const kPrefCrosshairRuler = @"crosshairRuler";
+
 // ── 3270-font loader (called once) ───────────────────────────────────────────
 // Registers all three weight variants from the app bundle's Resources/fonts/
 // folder with Core Text so they can be loaded by name.
@@ -175,7 +178,7 @@ static NSColor *colorFor5250Attr(uint8_t attr) {
         _backgroundColor  = [NSColor colorWithRed:0.0  green:0.0  blue:0.0  alpha:1.0]; // black
         _intensifiedColor = [NSColor colorWithRed:1.00 green:0.33 blue:0.33 alpha:1.0]; // red  (unprotected intensified)
         _cursorColor      = [NSColor colorWithRed:0.20 green:0.85 blue:0.20 alpha:1.0]; // green
-
+        _showCrosshairRuler = [[NSUserDefaults standardUserDefaults] boolForKey:kPrefCrosshairRuler]; // initialize from user defaults
         [self applyFontFromPreferences];
         [self recalcCellSize];
 
@@ -481,6 +484,34 @@ static NSColor *colorFor5250Attr(uint8_t attr) {
 
     // ── Draw OIA (status bar) ─────────────────────────────────────────────────
     [self drawOIA];
+
+    // --- Draw Crosshair Ruler Overlay ---
+    if (self.showCrosshairRuler && _screen) {
+        int curPos = _screen->cursorPos();
+        int curRow = curPos / _cols;
+        int curCol = curPos % _cols;
+        
+        // Calcola l'angolo in basso a sinistra della cella del cursore
+        CGFloat lineX = curCol * _charW; 
+        CGFloat lineY = effectiveHeight - (curRow + 1) * _charH; // Margine inferiore della riga
+        CGFloat textBottomY = effectiveHeight - _rows * _charH;  // Evita di coprire l'OIA
+        
+        // Colore rosso con il 40% di opacità
+        [[NSColor colorWithRed:1.0 green:0.2 blue:0.2 alpha:0.4] setStroke];
+        NSBezierPath *ruler = [NSBezierPath bezierPath];
+        [ruler setLineWidth:2.0];
+        
+        // Riga Orizzontale (Sottolinea la riga del cursore)
+        [ruler moveToPoint:NSMakePoint(0, lineY)];
+        [ruler lineToPoint:NSMakePoint(_cols * _charW, lineY)];
+        
+        // Linea Verticale (Si allinea al margine sinistro del cursore)
+        [ruler moveToPoint:NSMakePoint(lineX, effectiveHeight)];
+        [ruler lineToPoint:NSMakePoint(lineX, textBottomY)];
+        
+        [ruler stroke];
+    }
+
 
     // ── Draw GOCA graphics overlay ────────────────────────────────────────────
     if (_graphics && !_graphics->commands().empty()) {
@@ -1188,6 +1219,11 @@ static constexpr CGFloat kGocaCellH = 12.0; // must match AH in buildQueryReply(
         }
     }
     
+    [self setNeedsDisplay:YES];
+}
+
+- (void)toggleCrosshairRuler {
+    self.showCrosshairRuler = !self.showCrosshairRuler;
     [self setNeedsDisplay:YES];
 }
 

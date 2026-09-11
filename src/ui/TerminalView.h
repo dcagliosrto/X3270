@@ -9,6 +9,7 @@
 /// NSUserDefaults key – BOOL; YES = use bundled IBM 3270 font (by Ricardo Bánffy)
 extern NSString * const kPref3270FontEnabled;
 extern NSString * const kPrefHerculesBrackets;
+extern NSString * const kPrefCrosshairRuler;
 
 /// TerminalView renders the 3270/5250 screen buffer as a character grid using
 /// Core Text.  It also handles all keyboard input and forwards it to
@@ -38,11 +39,15 @@ extern NSString * const kPrefHerculesBrackets;
 /// Preferred window content size for the attached screen buffer's model + OIA
 - (NSSize)preferredSize;
 
+/// Toggle the visibility of the crosshair ruler.
+- (void)toggleCrosshairRuler;
+
+
 /// Colour scheme
 @property (nonatomic, strong) NSColor *foregroundColor;
 @property (nonatomic, strong) NSColor *backgroundColor;
 @property (nonatomic, strong) NSColor *intensifiedColor;
 @property (nonatomic, strong) NSColor *cursorColor;
 @property (nonatomic, strong) NSFont  *terminalFont;
-
+@property (nonatomic, assign) BOOL showCrosshairRuler;
 @end

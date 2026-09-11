@@ -5,6 +5,7 @@ NS_ASSUME_NONNULL_BEGIN
 @protocol CommandDockDelegate <NSObject>
 - (void)commandDockDidRequestISPFCommand:(NSString *)command targetGroup:(nullable NSString *)group;
 - (void)commandDockDidRequestOutOdBandCommand:(NSString *)command targetGroup:(nullable NSString *)group;
+- (void)commandDockDidToggleRuler;
 @end
 
 @interface CommandDockViewController : NSViewController

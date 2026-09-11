@@ -4,6 +4,7 @@
 @implementation PreferencesWindowController {
     NSButton *_use3270FontCheckbox;
     NSButton *_herculesBracketsCheckbox;
+    NSButton *_crosshairRulerCheckbox;
     
     // Fast Paths UI properties
     NSTableView *_fastPathsTable;
@@ -138,6 +139,14 @@
     compatNote.font = [NSFont systemFontOfSize:11];
     compatNote.frame = NSMakeRect(margin + 18, 310, 362, 56);
     [cv addSubview:compatNote];
+
+    _crosshairRulerCheckbox = [NSButton checkboxWithTitle:@"Show Crosshair Ruler (Cursor Guide) by default"
+                                                   target:self
+                                                   action:@selector(crosshairRulerChanged:)];
+    _crosshairRulerCheckbox.frame = NSMakeRect(margin, 345, 380, 22);
+    BOOL rulerValue = [[NSUserDefaults standardUserDefaults] boolForKey:kPrefCrosshairRuler];
+    _crosshairRulerCheckbox.state = rulerValue ? NSControlStateValueOn : NSControlStateValueOff;
+    [cv addSubview:_crosshairRulerCheckbox];
 
     // ==========================================
     // Section: Command Dock Fast Paths
@@ -298,6 +307,11 @@
 - (void)open3270FontLink:(id)sender {
     [[NSWorkspace sharedWorkspace]
         openURL:[NSURL URLWithString:@"https://github.com/rbanffy/3270font"]];
+}
+
+- (void)crosshairRulerChanged:(NSButton *)sender {
+    BOOL enabled = (sender.state == NSControlStateValueOn);
+    [[NSUserDefaults standardUserDefaults] setBool:enabled forKey:kPrefCrosshairRuler];
 }
 
 @end

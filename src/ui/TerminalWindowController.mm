@@ -894,4 +894,10 @@ static NSString * const kDX3270BroadcastOOBNotification  = @"DX3270BroadcastOOBN
     });
 }
 
+- (void)commandDockDidToggleRuler {
+    if (_termView) {
+        [_termView toggleCrosshairRuler];
+    }
+}
+
 @end

@@ -101,6 +101,13 @@
     [self.ispfCommandField.widthAnchor constraintEqualToConstant:90].active = YES;
     [mainStack addArrangedSubview:self.ispfCommandField];
 
+    // Ruler Toggle Button
+    NSButton *rulerBtn = [NSButton buttonWithTitle:@"\u253C Ruler" target:self action:@selector(rulerButtonClicked:)];
+    rulerBtn.toolTip = @"Toggle Crosshair Ruler for this session";
+    rulerBtn.bezelStyle = NSBezelStyleInline;
+    rulerBtn.controlSize = NSControlSizeSmall;
+    [mainStack addArrangedSubview:rulerBtn];
+
     // Spacer
     NSView *spacer = [[NSView alloc] init];
     [spacer setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
@@ -414,4 +421,11 @@
         [self.completionPopover close];
     }
 }
+
+- (void)rulerButtonClicked:(NSButton *)sender {
+    if ([self.delegate respondsToSelector:@selector(commandDockDidToggleRuler)]) {
+        [self.delegate commandDockDidToggleRuler];
+    }
+}
+
 @end
