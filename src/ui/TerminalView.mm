@@ -3,6 +3,7 @@
 #import <CoreGraphics/CoreGraphics.h>
 #include "EbcdicCodec.h"
 #include "GraphicsBuffer.h"
+#import "DataInspectorViewController.h"
 #include <string>
 
 /// NSUserDefaults key – BOOL; YES = use bundled IBM 3270 font
@@ -148,6 +149,7 @@ static NSColor *colorFor5250Attr(uint8_t attr) {
     NSTimer* _cursorTimer;
     BOOL     _cursorVisible;
     NSArray<NSDictionary *> *_panelRules;
+    NSPopover *_dataInspectorPopover;
 
     int      _rows;    // character grid rows (mirrors _screen->rows())
     int      _cols;    // character grid cols (mirrors _screen->cols())
@@ -928,6 +930,21 @@ static constexpr CGFloat kGocaCellH = 12.0; // must match AH in buildQueryReply(
     NSPoint pt = [self convertPoint:[event locationInWindow] fromView:nil];
     int offset = [self offsetForPoint:pt];
     
+    // --- NEW: Intercept Option + Click for Data Inspector ---
+    if (([event modifierFlags] & NSEventModifierFlagOption) != 0) {
+        if (offset >= 0) {
+            // Move the hardware cursor and selection so the ruler follows!
+            _screen->setCursor(offset);
+            _selStart = offset;
+            _selEnd = offset;
+            [self setNeedsDisplay:YES];
+            
+            [self showDataInspectorAtOffset:offset event:event];
+        }
+        return; // Consume the event
+    }
+    // --------------------------------------------------------
+
     if (offset >= 0) {
         _screen->setCursor(offset);
         _selStart = offset;
@@ -939,6 +956,86 @@ static constexpr CGFloat kGocaCellH = 12.0; // must match AH in buildQueryReply(
         _selEnd = -1;
         [self setNeedsDisplay:YES];
     }
+}
+
+- (void)showDataInspectorAtOffset:(int)offset event:(NSEvent *)event {
+    if (!_screen) return;
+    
+    NSMutableData *rawBytes = [NSMutableData data];
+    NSMutableString *decodedText = [NSMutableString string];
+    NSMutableData *verticalHexBytes = [NSMutableData data];
+    NSMutableString *verticalDecodedText = [NSMutableString string];
+    
+    int maxBytes = 16;
+    int maxScreenSize = _rows * _cols;
+    
+    // Lambda to convert a Unicode character to its Hex value (0-15)
+    auto hexCharToInt = [](uint16_t c) -> int {
+        if (c >= '0' && c <= '9') return c - '0';
+        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+        return -1;
+    };
+    
+    for (int i = 0; i < maxBytes && (offset + i) < maxScreenSize; i++) {
+        // 1. Raw EBCDIC from the buffer
+        uint8_t byte = _screen->at(offset + i).ch;
+        [rawBytes appendBytes:&byte length:1];
+        
+        // 2. Translated Text for Raw Buffer
+        uint16_t uc = _codec.toUnicode(byte);
+        if (uc >= 0x20) {
+            [decodedText appendFormat:@"%C", (unichar)uc];
+        } else {
+            [decodedText appendString:@"."];
+        }
+        
+        // 3. ISPF Vertical Hex (Current row + Row below)
+        int posBottom = offset + _cols + i;
+        if (posBottom < maxScreenSize) {
+            uint16_t uTop = _codec.toUnicode(_screen->at(offset + i).ch);
+            uint16_t uBot = _codec.toUnicode(_screen->at(posBottom).ch);
+            
+            int hTop = hexCharToInt(uTop);
+            int hBot = hexCharToInt(uBot);
+            
+            if (hTop >= 0 && hBot >= 0 && verticalHexBytes.length == (NSUInteger)i) {
+                uint8_t vByte = (uint8_t)((hTop << 4) | hBot);
+                [verticalHexBytes appendBytes:&vByte length:1];
+                
+                // Decode the reconstructed vertical byte into EBCDIC text
+                uint16_t vUc = _codec.toUnicode(vByte);
+                if (vUc >= 0x20) {
+                    [verticalDecodedText appendFormat:@"%C", (unichar)vUc];
+                } else {
+                    [verticalDecodedText appendString:@"."];
+                }
+            }
+        }
+    }
+    
+    DataInspectorViewController *inspector = [[DataInspectorViewController alloc] initWithRawBytes:rawBytes decodedString:decodedText verticalHex:verticalHexBytes verticalDecodedString:verticalDecodedText];
+    
+    if (_dataInspectorPopover) {
+        [_dataInspectorPopover close];
+    }
+    
+    _dataInspectorPopover = [[NSPopover alloc] init];
+    _dataInspectorPopover.contentViewController = inspector;
+    _dataInspectorPopover.behavior = NSPopoverBehaviorTransient;
+    
+    NSSize pref = [self preferredSize];
+    CGFloat scaleX = self.bounds.size.width / pref.width;
+    CGFloat scaleY = self.bounds.size.height / pref.height;
+    
+    int col = offset % _cols;
+    int row = offset / _cols;
+    
+    CGFloat scaledCharW = _charW * scaleX;
+    CGFloat scaledCharH = _charH * scaleY;
+    NSRect charRect = NSMakeRect(col * scaledCharW, self.bounds.size.height - (row + 1) * scaledCharH, scaledCharW, scaledCharH);
+    
+    [_dataInspectorPopover showRelativeToRect:charRect ofView:self preferredEdge:NSRectEdgeMaxY];
 }
 
 - (void)mouseDragged:(NSEvent *)event {

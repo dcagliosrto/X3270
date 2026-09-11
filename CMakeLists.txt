@@ -46,6 +46,7 @@ set(UI_SOURCES
     src/ui/TransferDockViewController.mm
     src/ui/CommandDockViewController.mm
     src/ui/OOBPopoverViewController.mm
+    src/ui/DataInspectorViewController.mm
 )
 
 # ── App Bundle ────────────────────────────────────────────────────────────────
