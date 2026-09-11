@@ -143,7 +143,7 @@
     _crosshairRulerCheckbox = [NSButton checkboxWithTitle:@"Show Crosshair Ruler (Cursor Guide) by default"
                                                    target:self
                                                    action:@selector(crosshairRulerChanged:)];
-    _crosshairRulerCheckbox.frame = NSMakeRect(margin, 345, 380, 22);
+    _crosshairRulerCheckbox.frame = NSMakeRect(margin, 290, 380, 22);
     BOOL rulerValue = [[NSUserDefaults standardUserDefaults] boolForKey:kPrefCrosshairRuler];
     _crosshairRulerCheckbox.state = rulerValue ? NSControlStateValueOn : NSControlStateValueOff;
     [cv addSubview:_crosshairRulerCheckbox];
