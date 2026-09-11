@@ -388,6 +388,11 @@
             __strong typeof(weakSelf) s = weakSelf;
             __strong typeof(weakTwc)  t = weakTwc;
             if (s && t) [s.terminals removeObject:t];
+
+            s.connectButton.enabled = YES;
+            if ([s.statusLabel.stringValue isEqualToString:@"Connecting..."]) {
+                    s.statusLabel.stringValue = @"";
+            }
         });
     };
 }
