@@ -2,6 +2,7 @@
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import "TerminalWindowController.h"
 #import "TransferDockViewController.h"
+#import "CommandDockViewController.h"
 #import "TerminalView.h"
 #import "DebugWindowController.h"
 #include "ITerminalSession.h"
@@ -19,7 +20,11 @@
 #include <thread>
 #include <string>
 
-@interface TerminalWindowController () <NSWindowDelegate>
+// Broadcast notification constants
+static NSString * const kDX3270BroadcastISPFNotification = @"DX3270BroadcastISPFNotification";
+static NSString * const kDX3270BroadcastOOBNotification  = @"DX3270BroadcastOOBNotification";
+
+@interface TerminalWindowController () <NSWindowDelegate, CommandDockDelegate>
 @property (nonatomic, strong) NSSplitViewController *splitViewController;
 @property (nonatomic, strong) NSSplitViewItem *sidebarSplitItem;
 @end
@@ -88,11 +93,23 @@
         [self buildUI];
         [self startNetworkConnection];
 
+        // Register default preferences observer
         [[NSNotificationCenter defaultCenter]
             addObserver:self
                selector:@selector(userDefaultsDidChange:)
                    name:NSUserDefaultsDidChangeNotification
                  object:nil];
+
+        // Register inter-window broadcast observers directly in init
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(handleBroadcastISPFCommand:)
+                                                     name:kDX3270BroadcastISPFNotification
+                                                   object:nil];
+                                                   
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(handleBroadcastOOBCommand:)
+                                                     name:kDX3270BroadcastOOBNotification
+                                                   object:nil];
     }
     return self;
 }
@@ -108,10 +125,9 @@
     if (!self.sidebarSplitItem) return;
     
     [NSAnimationContext runAnimationGroup:^(NSAnimationContext *context) {
-        context.duration = 0.25; // macOS native animation duration
+        context.duration = 0.25;
         self.sidebarSplitItem.animator.collapsed = !self.sidebarSplitItem.isCollapsed;
     } completionHandler:^{
-        // Notify the terminal view to recalculate the AffineTransform
         [self->_termView setNeedsDisplay:YES];
     }];
 }
@@ -136,7 +152,6 @@
     __weak TerminalWindowController *weakSelf = self;
 
     if (_protocol == x3270::TerminalProtocol::TN5250) {
-        // ── 5250 engine ───────────────────────────────────────────────────────
         auto* session5250 = new x3270::TN5250Session();
         session5250->setModel(_model);
         _session.reset(session5250);
@@ -153,12 +168,10 @@
         _parser5250->setAlarmCallback([]() {
             dispatch_async(dispatch_get_main_queue(), ^{ NSBeep(); });
         });
-        // Query reply and other parser-initiated responses (e.g. CMD_WRITE_STRUCTURED_FIELD)
         _parser5250->setSendCallback([weakSelf](const std::vector<uint8_t>& payload) {
             __strong auto s = weakSelf;
             if (s) s->_session->sendRecord(payload);
         });
-        // Query reply uses GDS opcode NO_OP (0x00), not PUT_GET (0x03)
         _parser5250->setQueryReplyCallback([weakSelf, session5250](const std::vector<uint8_t>& payload) {
             __strong auto s = weakSelf;
             if (s) session5250->sendGdsRecord(payload, x3270::GDS_OP_NO_OP);
@@ -173,7 +186,6 @@
             __strong auto s = weakSelf;
             if (!s) return;
 
-            // Log the GDS record header for debugging
             if (!record.empty()) {
                 uint8_t b0 = record.size()>0 ? record[0] : 0;
                 uint8_t b1 = record.size()>1 ? record[1] : 0;
@@ -185,9 +197,6 @@
                       record.size(), b0, b1, b2, b3, b4, b5);
             }
 
-            // Per the reference (session.c tn5250_session_handle_receive):
-            // PUT_GET (0x03) and INVITE (0x01) opcodes immediately unlock the keyboard
-            // (set invited=1 and clear X_CLOCK indicator) BEFORE processing stream content.
             if (record.size() >= 10) {
                 uint8_t opcode = record[9];
                 if (opcode == 0x01 || opcode == 0x03) {
@@ -199,7 +208,6 @@
             }
 
             s->_parser5250->processRecord(record);
-            NSLog(@"[5250] after processRecord: bufPtr=%d", s->_screen->bufferPointer());
             dispatch_async(dispatch_get_main_queue(), ^{
                 __strong auto s2 = weakSelf;
                 if (s2) [s2->_termView screenDidUpdate];
@@ -207,7 +215,6 @@
         });
 
     } else {
-        // ── 3270 engine ───────────────────────────────────────────────────────
         _graphics = std::make_unique<x3270::GraphicsBuffer>();
         auto* session3270 = new x3270::TN3270Session();
         session3270->setModel(_model);
@@ -245,7 +252,6 @@
         _session->setDataCallback([weakSelf](const std::vector<uint8_t>& record) {
             __strong auto s = weakSelf;
             if (!s) return;
-            // TN3270E mode: strip 5-byte header and ignore non-3270-data records
             auto* s3270 = static_cast<x3270::TN3270Session*>(s->_session.get());
             const std::vector<uint8_t>* payload = &record;
             std::vector<uint8_t> stripped;
@@ -267,9 +273,6 @@
         dispatch_async(dispatch_get_main_queue(), ^{
             __strong auto s = weakSelf;
             if (s) {
-                // 3270: unlock immediately (server sends data right away)
-                // 5250: transition from Connecting → System; keyboard stays locked until
-                //       the server's first WTD+WCC2 fires the unlockCb_ in the parser.
                 if (s->_kbd3270) s->_kbd3270->unlock();
                 if (s->_kbd5250)
                     s->_kbd5250->lock(x3270::KeyboardState5250::LockReason::System);
@@ -284,9 +287,6 @@
         dispatch_async(dispatch_get_main_queue(), ^{
             __strong auto s = weakSelf;
             if (!s) return;
-            // If the user closed the window we already tore everything down,
-            // and the readLoop's parting "Connection closed" must not surface
-            // back to the connection screen.
             if (s->_userClosed) return;
             if (s.onConnectError) s.onConnectError(nsMsg);
             [s close];
@@ -329,7 +329,6 @@
     _termView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     [_termView setCodePage:_codePage];
 
-    // Wire the appropriate keyboard state to the terminal view
     if (_kbd3270) {
         [_termView setScreenBuffer:_screen.get() keyboardState:_kbd3270.get()];
         [_termView setGraphicsBuffer:_graphics.get()];
@@ -339,7 +338,7 @@
 
     // --- Command Dock Integration ---
     self.commandDock = [[CommandDockViewController alloc] init];
-    self.commandDock.delegate = self; // Assenza di retain cycle grazie a delegate weak
+    self.commandDock.delegate = self;
     
     NSStackView *terminalStack = [[NSStackView alloc] initWithFrame:_termView.frame];
     terminalStack.orientation = NSUserInterfaceLayoutOrientationVertical;
@@ -354,7 +353,6 @@
     [dockView setContentHuggingPriority:NSLayoutPriorityRequired forOrientation:NSLayoutConstraintOrientationVertical];
     [terminalStack addArrangedSubview:dockView];
 
-    // Setup for the SplitView containing the terminal and the transfer dock
     NSViewController *terminalVC = [[NSViewController alloc] init];
     terminalVC.view = terminalStack;
 
@@ -363,27 +361,20 @@
 
     self.splitViewController = [[NSSplitViewController alloc] init];
 
-    // Principal terminal: flexible, takes priority in resizing
     NSSplitViewItem *mainItem = [NSSplitViewItem splitViewItemWithViewController:terminalVC];
-    mainItem.holdingPriority = 200; // Priorità bassa: assorbe tutto il ridimensionamento della finestra
+    mainItem.holdingPriority = 200;
 
-    // Transfer Dock  
     self.sidebarSplitItem = [NSSplitViewItem splitViewItemWithViewController:_transferDockVC];
-    self.sidebarSplitItem.holdingPriority = 260; // Priorità alta: rimane fissa sui resize
+    self.sidebarSplitItem.holdingPriority = 260;
     self.sidebarSplitItem.canCollapse = YES;
-    self.sidebarSplitItem.collapsed = YES; // Nascosta di default all'avvio
-    
-    // Lock the width using the SplitView rules
+    self.sidebarSplitItem.collapsed = YES;
     self.sidebarSplitItem.minimumThickness = 280;
-    //self.sidebarSplitItem.maximumThickness = 280;
 
     [self.splitViewController addSplitViewItem:mainItem];
     [self.splitViewController addSplitViewItem:self.sidebarSplitItem];
 
-    // Assign the SplitViewController to the window
     self.window.contentViewController = self.splitViewController;
 
-    // Initial size based solely on the terminal grid + Command Dock height
     NSSize preferred = [_termView preferredSize];
     preferred.height += 40.0; 
     [self.window setContentSize:preferred];
@@ -398,15 +389,11 @@
     bool        verifyCert = _verifyCert == YES;
     std::string caBundle  = _caBundle ? [_caBundle UTF8String] : "";
 
-    // Capture self strongly so the controller stays alive while the network
-    // thread is running, but hand the final release back to the main thread
-    // so dealloc (and the AppKit teardown it triggers) never runs on a
-    // background thread.
     _networkThread = std::thread([self, host, port, useSSL, verifyCert, caBundle]() {
         @autoreleasepool {
             bool ok = _session->connect(host, port, useSSL, verifyCert, caBundle);
             if (ok) {
-                _session->readLoop(); // blocks until disconnected
+                _session->readLoop();
             }
         }
         __block TerminalWindowController *retained = self;
@@ -420,10 +407,6 @@
     _userClosed = YES;
     if (_session) _session->disconnect();
 
-    // Detach the view from the engine objects before the controller (and the
-    // unique_ptrs it owns) can be deallocated.  AppKit may still issue one
-    // final drawRect: as part of the window-close transaction, and without
-    // this the view would dereference freed ScreenBuffer/Keyboard pointers.
     [_termView setScreenBuffer:(x3270::ScreenBuffer*)nullptr
                 keyboardState:(x3270::KeyboardState*)nullptr];
     [_termView setGraphicsBuffer:nullptr];
@@ -431,15 +414,11 @@
     if (self.onClosed) self.onClosed();
 }
 
-/// Open the traffic monitor panel (⌘⇧D).
 - (IBAction)openDebugWindow:(id)sender {
     [_debugWC showWindow:nil];
     [_debugWC.window makeKeyAndOrderFront:nil];
 }
 
-// ── Screenshot ────────────────────────────────────────────────────────────────
-
-/// Save a PNG screenshot of the terminal view to a user-chosen file (⌘⇧P).
 - (IBAction)saveScreenshot:(id)sender {
     NSSavePanel *panel = [NSSavePanel savePanel];
     if (@available(macOS 11.0, *)) {
@@ -467,10 +446,6 @@
     }];
 }
 
-// ── Text export ───────────────────────────────────────────────────────────────
-
-/// Export the current terminal screen as UTF-8 plain text (⌘⇧T).
-/// Each row is written as a fixed-width line; columns are preserved by position.
 - (IBAction)exportText:(id)sender {
     if (!_screen || !_codec) return;
 
@@ -481,7 +456,6 @@
     for (int r = 0; r < rows; r++) {
         for (int c = 0; c < cols; c++) {
             const x3270::Cell &cell = _screen->at(r, c);
-            // Field-attribute cells and NUL/space bytes → space character
             if (cell.isFA || cell.ch == 0x00 ||
                 cell.ch == x3270::EbcdicCodec::EBCDIC_SPACE) {
                 [text appendString:@" "];
@@ -520,8 +494,6 @@
     }];
 }
 
-// ── Menu validation ───────────────────────────────────────────────────────────
-
 - (BOOL)validateMenuItem:(NSMenuItem *)item {
     SEL action = item.action;
     if (action == @selector(saveScreenshot:) ||
@@ -531,26 +503,57 @@
     return YES;
 }
 
+#pragma mark - Broadcast Dispatchers & Handlers
 
-#pragma mark - CommandDockDelegate (In-Band ISPF)
+- (void)commandDockDidRequestISPFCommand:(NSString *)command targetGroup:(NSString *)group {
+    // 1. Always execute locally on the current window
+    [self executeISPFCommandLocally:command];
+    
+    // 2. Broadcast to other linked windows
+    if (group.length > 0) {
+        NSDictionary *userInfo = @{
+            @"command": command,
+            @"group": group,
+            @"sender": self
+        };
+        [[NSNotificationCenter defaultCenter] postNotificationName:kDX3270BroadcastISPFNotification
+                                                            object:nil
+                                                          userInfo:userInfo];
+    }
+}
 
-- (void)commandDockDidRequestISPFCommand:(NSString *)command {
+- (void)handleBroadcastISPFCommand:(NSNotification *)notification {
+    TerminalWindowController *sender = notification.userInfo[@"sender"];
+    
+    // Ignore if this window initiated the broadcast
+    if (sender == self) return;
+    
+    NSString *targetGroup = notification.userInfo[@"group"];
+    NSString *command     = notification.userInfo[@"command"];
+    
+    // Check match on linkGroup
+    if (self.commandDock && [self.commandDock.linkGroup isEqualToString:targetGroup]) {
+        [self executeISPFCommandLocally:command];
+    }
+}
+
+- (void)executeISPFCommandLocally:(NSString *)command {
     if (!command || command.length == 0) return;
     
     NSString *finalCommand = [command stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
     
-    // 1. Auto-Add '=' for known Fast Paths if missing
+    // Auto-Add '=' for known Fast Paths if missing
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
     NSArray *fastPaths = [defaults arrayForKey:@"DX3270_FastPaths"];
     for (NSDictionary *path in fastPaths) {
         NSString *cmd = path[@"cmd"];
         if ([cmd hasPrefix:@"="] && [finalCommand isEqualToString:[cmd substringFromIndex:1]]) {
-            finalCommand = cmd; // Auto-convert "3.4" -> "=3.4" or "S;ST" -> "=S;ST"
+            finalCommand = cmd;
             break;
         }
     }
     
-    // 2. Auto-Prefix TSO for common utility commands if entered without 'TSO ' or '='
+    // Auto-Prefix TSO for common utility commands
     NSArray *tsoCommands = @[@"TIME", @"LISTALC", @"LISTDS", @"STATUS", @"ALLOC", @"FREE", @"SUBMIT"];
     NSString *upperCmd = finalCommand.uppercaseString;
     for (NSString *tsoCmd in tsoCommands) {
@@ -562,7 +565,7 @@
         }
     }
 
-    // 3. Smart Locator execution on 3270 buffer
+    // Smart Locator Execution
     BOOL handled = NO;
     if (_kbd3270 && _screen && _codec) {
         int cmdPos = -1;
@@ -605,9 +608,38 @@
     }
 }
 
-#pragma mark - CommandDockDelegate (Out-of-Band Background)
+#pragma mark - Out-of-Band Execution & Handlers
 
-- (void)commandDockDidRequestOutOdBandCommand:(NSString *)command {
+- (void)commandDockDidRequestOutOdBandCommand:(NSString *)command targetGroup:(NSString *)group {
+    // 1. Always execute locally on the current window
+    [self executeOutOdBandCommandLocally:command];
+    
+    // 2. Broadcast to other linked windows
+    if (group.length > 0) {
+        NSDictionary *userInfo = @{
+            @"command": command,
+            @"group": group,
+            @"sender": self
+        };
+        [[NSNotificationCenter defaultCenter] postNotificationName:kDX3270BroadcastOOBNotification
+                                                            object:nil
+                                                          userInfo:userInfo];
+    }
+}
+
+- (void)handleBroadcastOOBCommand:(NSNotification *)notification {
+    TerminalWindowController *sender = notification.userInfo[@"sender"];
+    if (sender == self) return;
+    
+    NSString *targetGroup = notification.userInfo[@"group"];
+    NSString *command     = notification.userInfo[@"command"];
+    
+    if (self.commandDock && [self.commandDock.linkGroup isEqualToString:targetGroup]) {
+        [self executeOutOdBandCommandLocally:command];
+    }
+}
+
+- (void)executeOutOdBandCommandLocally:(NSString *)command {
     if (!command || command.length == 0) return;
     
     NSString *targetHost = _host;
@@ -616,7 +648,6 @@
         targetHost = [NSString stringWithFormat:@"%@@%@", savedUser, _host];
     }
     
-    // Retrieve password from Keychain
     NSString *savedPassword = [self getPasswordForUser:savedUser];
     
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
@@ -626,7 +657,6 @@
         task.standardError = pipe;
         
         if (savedPassword.length > 0) {
-            // Use Expect to auto-inject the password from Keychain
             task.launchPath = @"/usr/bin/expect";
             NSMutableDictionary *env = [[NSProcessInfo processInfo].environment mutableCopy];
             env[@"SSH_PASS"] = savedPassword;
@@ -638,7 +668,6 @@
             
             NSMutableString *script = [NSMutableString string];
             [script appendString:@"set timeout 15\n"];
-            // Spawn SSH without BatchMode so it asks for the password
             [script appendFormat:@"spawn ssh %@ %@\n", targetHost, command];
             [script appendString:@"expect {\n"];
             [script appendString:@"  \"*yes/no*\" { send \"yes\\r\"; exp_continue }\n"];
@@ -650,7 +679,6 @@
             [inputPipe.fileHandleForWriting writeData:inputData];
             [inputPipe.fileHandleForWriting closeFile];
         } else {
-            // Fallback to key-based auth (BatchMode) if no password is saved
             task.launchPath = @"/usr/bin/ssh";
             task.arguments = @[@"-o", @"BatchMode=yes", targetHost, command];
         }
@@ -661,19 +689,14 @@
             NSData *data = [pipe.fileHandleForReading readDataToEndOfFile];
             NSString *rawOutput = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
             
-            // Clean up Expect/SSH headers from the raw stream
             NSString *cleanOutput = rawOutput;
             NSRange passwordRange = [cleanOutput rangeOfString:@"password:" options:NSCaseInsensitiveSearch];
             if (passwordRange.location != NSNotFound) {
-                // Extract everything after the password prompt line
                 NSUInteger startIndex = passwordRange.location + passwordRange.length;
                 cleanOutput = [cleanOutput substringFromIndex:startIndex];
-                
-                // Trim leading newlines and carriage returns
                 cleanOutput = [cleanOutput stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
             }
             
-            // If the first line echoes the command name (e.g. "tsocmd TIME"), strip it
             NSArray<NSString *> *lines = [cleanOutput componentsSeparatedByString:@"\n"];
             if (lines.count > 1 && [[lines[0] lowercaseString] containsString:[command lowercaseString]]) {
                 NSMutableArray<NSString *> *mutableLines = [lines mutableCopy];
@@ -683,10 +706,9 @@
             
             cleanOutput = [cleanOutput stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
 
-            // Display clean output on the main UI thread
             dispatch_async(dispatch_get_main_queue(), ^{
                 NSAlert *alert = [[NSAlert alloc] init];
-                alert.messageText = [NSString stringWithFormat:@"OOB Result: %@", command];
+                alert.messageText = [NSString stringWithFormat:@"OOB Result [%@]: %@", self->_host, command];
                 alert.informativeText = cleanOutput.length > 0 ? cleanOutput : @"(Command executed successfully with no output)";
                 alert.alertStyle = NSAlertStyleInformational;
                 [alert runModal];
