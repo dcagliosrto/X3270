@@ -1,15 +1,53 @@
 #import "TransferDockViewController.h"
 #import <netdb.h>
 #import <sys/socket.h>
+#import <Security/Security.h>
 
-@interface TransferDockViewController ()
+#pragma mark - DragDropTextField Component
+
+@interface DragDropTextField : NSTextField
+@end
+
+@implementation DragDropTextField
+
+- (instancetype)initWithFrame:(NSRect)frameRect {
+    if ((self = [super initWithFrame:frameRect])) {
+        [self registerForDraggedTypes:@[NSPasteboardTypeFileURL]];
+    }
+    return self;
+}
+
+- (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender {
+    NSPasteboard *pb = [sender draggingPasteboard];
+    if ([pb.types containsObject:NSPasteboardTypeFileURL]) {
+        return NSDragOperationCopy;
+    }
+    return NSDragOperationNone;
+}
+
+- (BOOL)performDragOperation:(id<NSDraggingInfo>)sender {
+    NSPasteboard *pb = [sender draggingPasteboard];
+    NSURL *fileURL = [NSURL URLFromPasteboard:pb];
+    if (fileURL) {
+        self.stringValue = fileURL.path;
+        return YES;
+    }
+    return NO;
+}
+
+@end
+
+#pragma mark - TransferDockViewController
+
+@interface TransferDockViewController () <NSTextFieldDelegate>
 @property (nonatomic, strong) NSPopUpButton *toolPopup;
 @property (nonatomic, strong) NSPopUpButton *modePopup;
 @property (nonatomic, strong) NSPopUpButton *directionPopup;
 @property (nonatomic, strong) NSTextField   *userField;
 @property (nonatomic, strong) NSSecureTextField *passwordField;
+@property (nonatomic, strong) NSButton      *useKeyCheckbox;
 @property (nonatomic, strong) NSTextField   *remoteDSField;
-@property (nonatomic, strong) NSTextField   *localPathField;
+@property (nonatomic, strong) DragDropTextField *localPathField;
 @property (nonatomic, strong) NSProgressIndicator *spinner;
 @property (nonatomic, strong) NSTextView    *consoleView;
 @property (nonatomic, strong) NSButton      *actionButton;
@@ -80,6 +118,7 @@
 
     self.userField = [NSTextField textFieldWithString:@""];
     self.userField.placeholderString = @"User";
+    self.userField.delegate = self;
     [self.userField.widthAnchor constraintEqualToConstant:120].active = YES;
     self.userField.usesSingleLineMode = YES;
     self.userField.cell.wraps = NO;
@@ -103,6 +142,16 @@
     [credStack addArrangedSubview:self.passwordField];
     [stack addArrangedSubview:credStack];
 
+    // Checkbox Key/Keychain
+    self.useKeyCheckbox = [NSButton checkboxWithTitle:@"Use SSH Key / Keychain" target:self action:@selector(toggleKeyAuth:)];
+    self.useKeyCheckbox.font = [NSFont systemFontOfSize:10];
+    [stack addArrangedSubview:self.useKeyCheckbox];
+
+    // Tentativo recupero password da Keychain se utente salvato
+    if (savedUser.length > 0) {
+        [self loadPasswordFromKeychainForUser:savedUser];
+    }
+
     // --- Remote Dataset / USS Path ---
     [stack addArrangedSubview:[self createLabel:@"z/OS Dataset or USS Path:"]];
     self.remoteDSField = [NSTextField textFieldWithString:@""];
@@ -114,15 +163,15 @@
     [self.remoteDSField setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
     [stack addArrangedSubview:self.remoteDSField];
 
-    // --- Local File Path ---
-    [stack addArrangedSubview:[self createLabel:@"Local Target File:"]];
+    // --- Local File Path (con DRAG & DROP) ---
+    [stack addArrangedSubview:[self createLabel:@"Local Target File (Drop supported):"]];
     
     NSStackView *localFileStack = [[NSStackView alloc] init];
     localFileStack.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     localFileStack.spacing = 6;
 
-    self.localPathField = [NSTextField textFieldWithString:@""];
-    self.localPathField.placeholderString = @"(Leave blank for auto-download)";
+    self.localPathField = [[DragDropTextField alloc] initWithFrame:NSZeroRect];
+    self.localPathField.placeholderString = @"(Drop file here or leave blank)";
     self.localPathField.lineBreakMode = NSLineBreakByTruncatingHead;
     [self.localPathField.widthAnchor constraintEqualToConstant:180].active = YES;
     self.localPathField.usesSingleLineMode = YES;
@@ -187,10 +236,9 @@
     self.consoleView.backgroundColor = [NSColor colorWithWhite:0.08 alpha:1.0];
     self.consoleView.textColor = [NSColor colorWithRed:0.4 green:0.9 blue:0.4 alpha:1.0];
     
-    // Personalizzazione dei colori di selezione per massimo contrasto
     self.consoleView.selectedTextAttributes = @{
-        NSBackgroundColorAttributeName: [NSColor colorWithRed:0.2 green:0.6 blue:0.2 alpha:1.0], // Sfondo selezione verde scuro
-        NSForegroundColorAttributeName: [NSColor blackColor]                                    // Testo selezionato NERO
+        NSBackgroundColorAttributeName: [NSColor colorWithRed:0.2 green:0.6 blue:0.2 alpha:1.0],
+        NSForegroundColorAttributeName: [NSColor blackColor]
     };
     
     self.consoleView.horizontallyResizable = NO;
@@ -205,6 +253,61 @@
     [containerView addSubview:stack];
 
     [self runProtocolProbes];
+}
+
+#pragma mark - Keychain & Auth Helpers
+
+- (void)toggleKeyAuth:(id)sender {
+    BOOL useKey = (self.useKeyCheckbox.state == NSControlStateValueOn);
+    self.passwordField.enabled = !useKey;
+    if (useKey) {
+        self.passwordField.stringValue = @"";
+    }
+}
+
+- (void)savePasswordToKeychain:(NSString *)password forUser:(NSString *)user {
+    if (!user.length || !password.length) return;
+    
+    NSData *passData = [password dataUsingEncoding:NSUTF8StringEncoding];
+    NSDictionary *query = @{
+        (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
+        (__bridge id)kSecAttrService: @"DX3270_Mainframe_Transfer",
+        (__bridge id)kSecAttrAccount: user
+    };
+    
+    SecItemDelete((__bridge CFDictionaryRef)query);
+    
+    NSMutableDictionary *attributes = [query mutableCopy];
+    attributes[(__bridge id)kSecValueData] = passData;
+    
+    SecItemAdd((__bridge CFDictionaryRef)attributes, NULL);
+}
+
+- (void)loadPasswordFromKeychainForUser:(NSString *)user {
+    if (!user.length) return;
+    
+    NSDictionary *query = @{
+        (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
+        (__bridge id)kSecAttrService: @"DX3270_Mainframe_Transfer",
+        (__bridge id)kSecAttrAccount: user,
+        (__bridge id)kSecReturnData: @YES,
+        (__bridge id)kSecMatchLimit: (__bridge id)kSecMatchLimitOne
+    };
+    
+    CFTypeRef dataTypeRef = NULL;
+    if (SecItemCopyMatching((__bridge CFDictionaryRef)query, &dataTypeRef) == errSecSuccess) {
+        NSData *data = (__bridge_transfer NSData *)dataTypeRef;
+        NSString *pass = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+        if (pass) {
+            self.passwordField.stringValue = pass;
+        }
+    }
+}
+
+- (void)controlTextDidChange:(NSNotification *)obj {
+    if (obj.object == self.userField) {
+        [self loadPasswordFromKeychainForUser:self.userField.stringValue];
+    }
 }
 
 #pragma mark - Background Probes
@@ -333,6 +436,7 @@
     
     NSString *user = [self.userField.stringValue stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
     NSString *password = self.passwordField.stringValue;
+    BOOL useKey = (self.useKeyCheckbox.state == NSControlStateValueOn);
     
     BOOL isUpload = (self.directionPopup.indexOfSelectedItem == 1);
 
@@ -379,7 +483,7 @@
     if (protocolIndex == 0 || protocolIndex == 1) {
         self.currentTask.launchPath = @"/usr/bin/expect";
         NSMutableDictionary *env = [[NSProcessInfo processInfo].environment mutableCopy];
-        if (password.length > 0) env[@"SFTP_PASS"] = password;
+        if (password.length > 0 && !useKey) env[@"SFTP_PASS"] = password;
         self.currentTask.environment = env;
         
         self.currentTask.arguments = @[@"-"];
@@ -388,20 +492,29 @@
         
         NSMutableString *script = [NSMutableString string];
         
-        // Connessione SFTP standard senza -s cozsftp
-        [script appendFormat:@"spawn sftp %@\n", targetHost];
+        // Flag -o BatchMode=yes se si usa la chiave SSH, così non chiede password
+        if (useKey) {
+            [script appendFormat:@"spawn sftp -o BatchMode=yes %@\n", targetHost];
+        } else {
+            [script appendFormat:@"spawn sftp %@\n", targetHost];
+        }
+        
         [script appendString:@"set timeout 30\n"];
         [script appendString:@"expect {\n"];
         [script appendString:@"  \"*yes/no*\" { send \"yes\\r\"; exp_continue }\n"];
-        [script appendString:@"  \"*assword:*\" {\n"];
-        [script appendString:@"      if {[info exists env(SFTP_PASS)]} {\n"];
-        [script appendString:@"          send \"$env(SFTP_PASS)\\r\"\n"];
-        [script appendString:@"          exp_continue\n"];
-        [script appendString:@"      } else {\n"];
-        [script appendString:@"          puts \"\\nERROR: Password required but not provided!\"\n"];
-        [script appendString:@"          exit 1\n"];
-        [script appendString:@"      }\n"];
-        [script appendString:@"  }\n"];
+        
+        if (!useKey) {
+            [script appendString:@"  \"*assword:*\" {\n"];
+            [script appendString:@"      if {[info exists env(SFTP_PASS)]} {\n"];
+            [script appendString:@"          send \"$env(SFTP_PASS)\\r\"\n"];
+            [script appendString:@"          exp_continue\n"];
+            [script appendString:@"      } else {\n"];
+            [script appendString:@"          puts \"\\nERROR: Password required but not provided!\"\n"];
+            [script appendString:@"          exit 1\n"];
+            [script appendString:@"      }\n"];
+            [script appendString:@"  }\n"];
+        }
+        
         [script appendString:@"  \"sftp>\" { }\n"];
         [script appendString:@"}\n"];
 
@@ -437,7 +550,7 @@
     } else if (protocolIndex == 2) {
         self.currentTask.launchPath = @"/usr/bin/curl";
         NSMutableArray *args = [NSMutableArray arrayWithObject:@"-sS"];
-        if (user.length > 0 && password.length > 0) {
+        if (user.length > 0 && password.length > 0 && !useKey) {
             [args addObjectsFromArray:@[@"-u", [NSString stringWithFormat:@"%@:%@", user, password]]];
         }
         NSString *url = [NSString stringWithFormat:@"ftp://%@/'%@'", host, remoteTarget];
@@ -454,7 +567,7 @@
     } else if (protocolIndex == 3) {
         self.currentTask.launchPath = @"/usr/bin/curl";
         NSMutableArray *args = [NSMutableArray arrayWithObject:@"-sS"];
-        if (user.length > 0 && password.length > 0) {
+        if (user.length > 0 && password.length > 0 && !useKey) {
             [args addObjectsFromArray:@[@"-u", [NSString stringWithFormat:@"%@:%@", user, password]]];
         }
         NSString *url = [NSString stringWithFormat:@"https://%@:10443/zosmf/restfiles/ds/%@", host, remoteTarget];
@@ -497,6 +610,11 @@
                 [strongSelf.spinner stopAnimation:nil];
                 strongSelf.actionButton.enabled = YES;
                 [strongSelf logMessage:[NSString stringWithFormat:@"[FINISHED] Exit code: %d", task.terminationStatus]];
+                
+                // Salva nel Keychain se il trasferimento ha avuto successo ed è stata usata una password
+                if (task.terminationStatus == 0 && user.length > 0 && password.length > 0 && !useKey) {
+                    [strongSelf savePasswordToKeychain:password forUser:user];
+                }
             }
         });
     };

@@ -44,6 +44,7 @@ set(UI_SOURCES
     src/ui/PreferencesWindowController.mm
     src/ui/ShortcutsWindowController.mm
     src/ui/TransferDockViewController.mm
+    src/ui/CommandDockViewController.mm
 )
 
 # ── App Bundle ────────────────────────────────────────────────────────────────
@@ -75,6 +76,7 @@ target_link_libraries(DX3270 PRIVATE
     "-framework CoreText"
     "-framework CoreGraphics"
     "-weak_framework UniformTypeIdentifiers"
+    "-framework Security"
 )
 
 target_compile_options(DX3270 PRIVATE

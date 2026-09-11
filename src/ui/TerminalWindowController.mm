@@ -1,3 +1,4 @@
+#import <Security/Security.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import "TerminalWindowController.h"
 #import "TransferDockViewController.h"
@@ -302,6 +303,26 @@
     });
 }
 
+// Fetches the saved password from macOS Keychain used by Transfer Dock
+- (NSString *)getPasswordForUser:(NSString *)user {
+    if (!user || user.length == 0) return nil;
+    
+    NSDictionary *query = @{
+        (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
+        (__bridge id)kSecAttrService: @"DX3270_Mainframe_Transfer",
+        (__bridge id)kSecAttrAccount: user,
+        (__bridge id)kSecReturnData: @YES,
+        (__bridge id)kSecMatchLimit: (__bridge id)kSecMatchLimitOne
+    };
+    
+    CFTypeRef dataTypeRef = NULL;
+    if (SecItemCopyMatching((__bridge CFDictionaryRef)query, &dataTypeRef) == errSecSuccess) {
+        NSData *data = (__bridge_transfer NSData *)dataTypeRef;
+        return [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+    }
+    return nil;
+}
+
 // ── UI ────────────────────────────────────────────────────────────────────────
 - (void)buildUI {
     _termView = [[TerminalView alloc] initWithFrame:NSMakeRect(0, 0, 640, 420)];
@@ -316,9 +337,26 @@
         [_termView setScreenBuffer:_screen.get() keyboardState5250:_kbd5250.get()];
     }
 
+    // --- Command Dock Integration ---
+    self.commandDock = [[CommandDockViewController alloc] init];
+    self.commandDock.delegate = self; // Assenza di retain cycle grazie a delegate weak
+    
+    NSStackView *terminalStack = [[NSStackView alloc] initWithFrame:_termView.frame];
+    terminalStack.orientation = NSUserInterfaceLayoutOrientationVertical;
+    terminalStack.spacing = 0;
+    terminalStack.alignment = NSLayoutAttributeWidth;
+    
+    [_termView setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationVertical];
+    
+    [terminalStack addArrangedSubview:_termView];
+    
+    NSView *dockView = self.commandDock.view;
+    [dockView setContentHuggingPriority:NSLayoutPriorityRequired forOrientation:NSLayoutConstraintOrientationVertical];
+    [terminalStack addArrangedSubview:dockView];
+
     // Setup for the SplitView containing the terminal and the transfer dock
     NSViewController *terminalVC = [[NSViewController alloc] init];
-    terminalVC.view = _termView;
+    terminalVC.view = terminalStack;
 
     _transferDockVC = [[TransferDockViewController alloc] init];
     _transferDockVC.currentHost = _host;
@@ -345,8 +383,9 @@
     // Assign the SplitViewController to the window
     self.window.contentViewController = self.splitViewController;
 
-    // Initial size based solely on the terminal grid
+    // Initial size based solely on the terminal grid + Command Dock height
     NSSize preferred = [_termView preferredSize];
+    preferred.height += 40.0; 
     [self.window setContentSize:preferred];
     [self.window makeFirstResponder:_termView];
 }
@@ -490,6 +529,170 @@
         return _session != nullptr;
     }
     return YES;
+}
+
+
+#pragma mark - CommandDockDelegate (In-Band ISPF)
+
+- (void)commandDockDidRequestISPFCommand:(NSString *)command {
+    if (!command || command.length == 0) return;
+    
+    NSString *finalCommand = [command stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    
+    // 1. Auto-Add '=' for known Fast Paths if missing
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    NSArray *fastPaths = [defaults arrayForKey:@"DX3270_FastPaths"];
+    for (NSDictionary *path in fastPaths) {
+        NSString *cmd = path[@"cmd"];
+        if ([cmd hasPrefix:@"="] && [finalCommand isEqualToString:[cmd substringFromIndex:1]]) {
+            finalCommand = cmd; // Auto-convert "3.4" -> "=3.4" or "S;ST" -> "=S;ST"
+            break;
+        }
+    }
+    
+    // 2. Auto-Prefix TSO for common utility commands if entered without 'TSO ' or '='
+    NSArray *tsoCommands = @[@"TIME", @"LISTALC", @"LISTDS", @"STATUS", @"ALLOC", @"FREE", @"SUBMIT"];
+    NSString *upperCmd = finalCommand.uppercaseString;
+    for (NSString *tsoCmd in tsoCommands) {
+        if ([upperCmd isEqualToString:tsoCmd] || [upperCmd hasPrefix:[tsoCmd stringByAppendingString:@" "]]) {
+            if (![upperCmd hasPrefix:@"TSO "] && ![upperCmd hasPrefix:@"="]) {
+                finalCommand = [NSString stringWithFormat:@"TSO %@", finalCommand];
+            }
+            break;
+        }
+    }
+
+    // 3. Smart Locator execution on 3270 buffer
+    BOOL handled = NO;
+    if (_kbd3270 && _screen && _codec) {
+        int cmdPos = -1;
+        int sz = _screen->size();
+        uint8_t eq = _codec->fromAscii('=');
+        uint8_t gt = _codec->fromAscii('>');
+        
+        for (int i = 0; i < sz - 4; i++) {
+            if (_screen->at(i).ch == eq &&
+                _screen->at(i+1).ch == eq &&
+                _screen->at(i+2).ch == eq &&
+                _screen->at(i+3).ch == gt) {
+                
+                cmdPos = i + 4;
+                if (cmdPos < sz && _screen->at(cmdPos).isFA) {
+                    cmdPos++;
+                }
+                break;
+            }
+        }
+        
+        if (cmdPos >= 0) {
+            _screen->setCursor(cmdPos);
+        } else {
+            _kbd3270->handleHome(); 
+        }
+        
+        _kbd3270->handleEraseEOF();
+        for (NSUInteger i = 0; i < finalCommand.length; i++) {
+            _kbd3270->handleChar((uint8_t)[finalCommand characterAtIndex:i]);
+        }
+        
+        handled = _kbd3270->handleEnter();
+    }
+    
+    if (handled) {
+        [_termView setNeedsDisplay:YES];
+    } else {
+        NSBeep();
+    }
+}
+
+#pragma mark - CommandDockDelegate (Out-of-Band Background)
+
+- (void)commandDockDidRequestOutOdBandCommand:(NSString *)command {
+    if (!command || command.length == 0) return;
+    
+    NSString *targetHost = _host;
+    NSString *savedUser = [[NSUserDefaults standardUserDefaults] stringForKey:@"DX3270_TransferUser"];
+    if (savedUser.length > 0) {
+        targetHost = [NSString stringWithFormat:@"%@@%@", savedUser, _host];
+    }
+    
+    // Retrieve password from Keychain
+    NSString *savedPassword = [self getPasswordForUser:savedUser];
+    
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        NSTask *task = [[NSTask alloc] init];
+        NSPipe *pipe = [NSPipe pipe];
+        task.standardOutput = pipe;
+        task.standardError = pipe;
+        
+        if (savedPassword.length > 0) {
+            // Use Expect to auto-inject the password from Keychain
+            task.launchPath = @"/usr/bin/expect";
+            NSMutableDictionary *env = [[NSProcessInfo processInfo].environment mutableCopy];
+            env[@"SSH_PASS"] = savedPassword;
+            task.environment = env;
+            task.arguments = @[@"-"];
+            
+            NSPipe *inputPipe = [NSPipe pipe];
+            task.standardInput = inputPipe;
+            
+            NSMutableString *script = [NSMutableString string];
+            [script appendString:@"set timeout 15\n"];
+            // Spawn SSH without BatchMode so it asks for the password
+            [script appendFormat:@"spawn ssh %@ %@\n", targetHost, command];
+            [script appendString:@"expect {\n"];
+            [script appendString:@"  \"*yes/no*\" { send \"yes\\r\"; exp_continue }\n"];
+            [script appendString:@"  \"*assword:*\" { send \"$env(SSH_PASS)\\r\"; exp_continue }\n"];
+            [script appendString:@"  eof\n"];
+            [script appendString:@"}\n"];
+            
+            NSData *inputData = [script dataUsingEncoding:NSUTF8StringEncoding];
+            [inputPipe.fileHandleForWriting writeData:inputData];
+            [inputPipe.fileHandleForWriting closeFile];
+        } else {
+            // Fallback to key-based auth (BatchMode) if no password is saved
+            task.launchPath = @"/usr/bin/ssh";
+            task.arguments = @[@"-o", @"BatchMode=yes", targetHost, command];
+        }
+        
+        NSError *error = nil;
+        if ([task launchAndReturnError:&error]) {
+            [task waitUntilExit];
+            NSData *data = [pipe.fileHandleForReading readDataToEndOfFile];
+            NSString *rawOutput = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+            
+            // Clean up Expect/SSH headers from the raw stream
+            NSString *cleanOutput = rawOutput;
+            NSRange passwordRange = [cleanOutput rangeOfString:@"password:" options:NSCaseInsensitiveSearch];
+            if (passwordRange.location != NSNotFound) {
+                // Extract everything after the password prompt line
+                NSUInteger startIndex = passwordRange.location + passwordRange.length;
+                cleanOutput = [cleanOutput substringFromIndex:startIndex];
+                
+                // Trim leading newlines and carriage returns
+                cleanOutput = [cleanOutput stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+            }
+            
+            // If the first line echoes the command name (e.g. "tsocmd TIME"), strip it
+            NSArray<NSString *> *lines = [cleanOutput componentsSeparatedByString:@"\n"];
+            if (lines.count > 1 && [[lines[0] lowercaseString] containsString:[command lowercaseString]]) {
+                NSMutableArray<NSString *> *mutableLines = [lines mutableCopy];
+                [mutableLines removeObjectAtIndex:0];
+                cleanOutput = [mutableLines componentsJoinedByString:@"\n"];
+            }
+            
+            cleanOutput = [cleanOutput stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+
+            // Display clean output on the main UI thread
+            dispatch_async(dispatch_get_main_queue(), ^{
+                NSAlert *alert = [[NSAlert alloc] init];
+                alert.messageText = [NSString stringWithFormat:@"OOB Result: %@", command];
+                alert.informativeText = cleanOutput.length > 0 ? cleanOutput : @"(Command executed successfully with no output)";
+                alert.alertStyle = NSAlertStyleInformational;
+                [alert runModal];
+            });
+        }
+    });
 }
 
 @end

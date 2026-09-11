@@ -1,12 +1,13 @@
 #pragma once
 #import <AppKit/AppKit.h>
+#import "CommandDockViewController.h"
 #include "EbcdicCodec.h"
 #include "TerminalModel.h"
 #include "TerminalProtocol.h"
 #include <string>
 
 /// Owns the TN3270 or TN5250 session and wires the core engine to the TerminalView.
-@interface TerminalWindowController : NSWindowController
+@interface TerminalWindowController : NSWindowController <CommandDockDelegate>
 
 - (instancetype)initWithHost:(NSString*)host
                         port:(uint16_t)port
@@ -20,6 +21,7 @@
 /// Callbacks for ConnectionWindowController to observe results
 @property (nonatomic, copy) void(^onConnected)(void);
 @property (nonatomic, copy) void(^onConnectError)(NSString*);
+@property (nonatomic, strong) CommandDockViewController *commandDock;
 /// Fired (on the main thread) when the terminal window has been closed by
 /// the user, so the owner can drop its strong reference.
 @property (nonatomic, copy) void(^onClosed)(void);
