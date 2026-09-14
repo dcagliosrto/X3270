@@ -125,9 +125,10 @@ void KeyboardState::sendPAKey(uint8_t aidCode) {
 }
 
 // ── Key handlers ──────────────────────────────────────────────────────────────
-bool KeyboardState::handleChar(uint8_t asciiChar) {
-    uint8_t ebcdic = codec_.fromAscii(asciiChar);
-    return handleEbcdicChar(ebcdic);
+bool KeyboardState::handleChar(uint16_t unicodeChar) {
+    if (isLocked()) return false;
+    uint8_t ebcdic = codec_.fromUnichar(unicodeChar);
+    return insertCharAtCursor(ebcdic);
 }
 
 bool KeyboardState::handleEbcdicChar(uint8_t ebcdic) {

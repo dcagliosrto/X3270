@@ -900,29 +900,27 @@ static constexpr CGFloat kGocaCellH = 12.0; // must match AH in buildQueryReply(
             handled = _kbd5250->handleBackspace();
         }
         else if (key == NSInsertFunctionKey || key == NSHelpFunctionKey) {
-            // Insert key (external PC keyboards) or Help key (Apple full-size
-            // keyboards — sits in the same physical position as PC Insert).
-            // MacBooks have neither; use ⌘+I instead (handled in performKeyEquivalent:).
             handled = _kbd5250->handleInsert();
         }
         else if (key == NSUpArrowFunctionKey)    { handled = _kbd5250->handleArrow(-1, 0); }
         else if (key == NSDownArrowFunctionKey)  { handled = _kbd5250->handleArrow(+1, 0); }
         else if (key == NSLeftArrowFunctionKey)  { handled = _kbd5250->handleArrow(0, -1); }
         else if (key == NSRightArrowFunctionKey) { handled = _kbd5250->handleArrow(0, +1); }
-        else if (!altDown) {
+        // Fallback for all printable characters (including Option-key symbols like @, #, [, ])
+        else {
             NSString *chars = event.characters;
             if (chars.length > 0) {
                 unichar c = [chars characterAtIndex:0];
-                if (c >= 0x20 && c < 0x80) {
-                    handled = _kbd5250->handleChar(static_cast<uint8_t>(c));
+                if (c >= 0x20 && c != 0x7F && key < 0xF700) {
+                    handled = _kbd5250->handleChar(c);
                 }
             }
         }
 
         if (handled) {
             [self setNeedsDisplay:YES];
-        } else {
-            if (_kbd5250->lockReason() == x3270::KeyboardState5250::LockReason::OErr) NSBeep();
+        } else if (_kbd5250->lockReason() == x3270::KeyboardState5250::LockReason::OErr) {
+            NSBeep();
         }
         return;
     }
@@ -985,13 +983,13 @@ static constexpr CGFloat kGocaCellH = 12.0; // must match AH in buildQueryReply(
     else if (altDown && (key == 'e' || key == 'E')) {
         handled = _kbd->handleEraseInput();
     }
-    // Printable ASCII
-    else if (!altDown) {
+    // Fallback for all printable characters (including Option-key symbols like @, #, [, ])
+    else {
         NSString *chars = event.characters;
         if (chars.length > 0) {
             unichar c = [chars characterAtIndex:0];
-            if (c >= 0x20 && c < 0x80) {
-                handled = _kbd->handleChar(static_cast<uint8_t>(c));
+            if (c >= 0x20 && c != 0x7F && key < 0xF700) {
+                handled = _kbd->handleChar(c);
             }
         }
     }

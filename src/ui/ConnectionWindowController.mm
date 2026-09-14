@@ -161,7 +161,15 @@
 
     // Code page
     _codePagePopup = [[NSPopUpButton alloc] init];
-    [_codePagePopup addItemsWithTitles:@[@"CP037 (US/Canada)", @"CP500 (International)", @"CP1047 (Open Systems)"]];
+    [_codePagePopup addItemsWithTitles:@[
+        @"CP037 (US/Canada)",
+        @"CP500 (International)",
+        @"CP1047 (Open Systems)",
+        @"CP280 (Italy)",
+        @"CP273 (Germany)",
+        @"CP284 (Spain)",
+        @"CP285 (United Kingdom)"
+    ]];
     addRow(@"Code Page:", _codePagePopup);
 
     // Screen model
@@ -320,6 +328,10 @@
     switch (_codePagePopup.indexOfSelectedItem) {
     case 1:  cp = x3270::CodePage::CP500;  break;
     case 2:  cp = x3270::CodePage::CP1047; break;
+    case 3:  cp = x3270::CodePage::CP280;  break;
+    case 4:  cp = x3270::CodePage::CP273;  break;
+    case 5:  cp = x3270::CodePage::CP284;  break;
+    case 6:  cp = x3270::CodePage::CP285;  break;
     default: cp = x3270::CodePage::CP037;  break;
     }
 
