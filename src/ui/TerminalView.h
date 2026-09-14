@@ -18,7 +18,6 @@ extern NSString * const kPrefCrosshairRuler;
 /// whichever keyboard state (TN3270 or TN5250) is active.
 @interface TerminalView : NSView <TimeMachineHUDDelegate>
 
-
 /// Set the EBCDIC code page used for display rendering.
 - (void)setCodePage:(x3270::CodePage)codePage;
 
@@ -48,6 +47,11 @@ extern NSString * const kPrefCrosshairRuler;
 // Time Machine HUD
 - (void)toggleTimeMachine;
 - (void)captureCurrentScreenSnapshot;
+
+/// Macro recording and playback actions
+- (IBAction)startRecordingMacro:(id)sender;
+- (IBAction)stopRecordingMacro:(id)sender;
+- (IBAction)playMacro:(id)sender;
 
 /// Colour scheme
 @property (nonatomic, strong) NSColor *foregroundColor;

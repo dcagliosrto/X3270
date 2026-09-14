@@ -1,6 +1,7 @@
 #pragma once
 #include "ScreenBuffer.h"
 #include "EbcdicCodec.h"
+#include "MacroRecorder.h"
 #include <cstdint>
 #include <vector>
 #include <functional>
@@ -76,6 +77,8 @@ public:
     bool handleCursorLeft();
     bool handleCursorRight();
     bool handleReset();
+    // ── Macro Recorder ─────────────────────────────────────────────────────────
+    void setMacroRecorder(MacroRecorder* recorder) { recorder_ = recorder; }
 
 private:
     void sendAID(uint8_t aidCode, bool includeModifiedFields);
@@ -93,6 +96,8 @@ private:
     LockReason          lockReason_  { LockReason::Connecting };
     bool                insertMode_  { false };
     SendRecordCallback  sendCb_;
+    // Macro recorder instance (not owned)
+    MacroRecorder* recorder_{nullptr};
 };
 
 } // namespace x3270

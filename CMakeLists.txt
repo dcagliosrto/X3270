@@ -32,6 +32,8 @@ set(CORE_SOURCES
     src/core/KeyboardState5250.cpp
     src/core/GraphicsBuffer.cpp
     src/core/GocaParser.cpp
+    src/core/MacroRecorder.cpp
+    src/core/MacroRunner.cpp
 )
 
 set(UI_SOURCES
@@ -50,6 +52,7 @@ set(UI_SOURCES
     src/utils/ConfigLoader.mm
     src/utils/TimeMachineManager.mm
     src/ui/TimeMachineHUDView.mm
+    src/core/MacroSerializer.mm
 )
 
 # ── App Bundle ────────────────────────────────────────────────────────────────

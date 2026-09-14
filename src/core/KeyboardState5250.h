@@ -1,6 +1,7 @@
 #pragma once
 #include "ScreenBuffer.h"
 #include "EbcdicCodec.h"
+#include "MacroRecorder.h"
 #include <cstdint>
 #include <vector>
 #include <functional>
@@ -96,7 +97,8 @@ public:
     bool handleDelete();
     bool handleEraseField();       ///< Erase to end of field
     bool handleInsert();
-
+    // ── Macro Recorder ─────────────────────────────────────────────────────────
+    void setMacroRecorder(MacroRecorder* recorder) { recorder_ = recorder; }
 private:
     ScreenBuffer& screen_;
     EbcdicCodec&  codec_;
@@ -110,7 +112,8 @@ private:
     void    advanceToNextField(bool forward);
     void    moveCursorToFirstUnprotected();
     bool    insertCharAtCursor(uint8_t ebcdic);
-
+    // Macro recorder instance (not owned)
+    MacroRecorder* recorder_{nullptr};
     // Build and send a 5250 input record.
     // record layout: [AID][cursor_row][cursor_col][SBA+data per modified field...]
     void sendAID(uint8_t aidCode, bool includeModifiedFields);

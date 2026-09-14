@@ -66,6 +66,31 @@
     [editMenu addItemWithTitle:@"Copy" action:@selector(copy:) keyEquivalent:@"c"];
     [editMenu addItemWithTitle:@"Paste" action:@selector(paste:) keyEquivalent:@"v"];
 
+    // ==========================================
+    // Macro menu
+    // ==========================================
+    NSMenuItem *macroMenuItem = [[NSMenuItem alloc] init];
+    [menuBar addItem:macroMenuItem];
+    NSMenu *macroMenu = [[NSMenu alloc] initWithTitle:@"Macro"];
+    macroMenuItem.submenu = macroMenu;
+    
+    NSMenuItem *recordItem = [macroMenu addItemWithTitle:@"Record Macro" 
+                                                  action:@selector(startRecordingMacro:) 
+                                           keyEquivalent:@"r"];
+    recordItem.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagControl;
+    
+    NSMenuItem *stopItem = [macroMenu addItemWithTitle:@"Stop & Save Macro..." 
+                                                action:@selector(stopRecordingMacro:) 
+                                         keyEquivalent:@"s"];
+    stopItem.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagControl;
+    
+    [macroMenu addItem:[NSMenuItem separatorItem]];
+    
+    NSMenuItem *playItem = [macroMenu addItemWithTitle:@"Play Macro..." 
+                                                action:@selector(playMacro:) 
+                                         keyEquivalent:@"p"];
+    playItem.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagControl;
+
     // Debug menu
     NSMenuItem *debugMenuItem = [[NSMenuItem alloc] init];
     [menuBar addItem:debugMenuItem];

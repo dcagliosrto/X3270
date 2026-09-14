@@ -4,10 +4,14 @@
 #include "EbcdicCodec.h"
 #include "GraphicsBuffer.h"
 #import "DataInspectorViewController.h"
+#include "../core/MacroRecorder.h"
+#include "../core/MacroRunner.h"
+#include "../core/MacroSerializer.h"
 #import "../utils/ConfigLoader.h"
 #import "TimeMachineHUDView.h"
 #import "../utils/TimeMachineManager.h"
 #include <string>
+#include <memory>
 
 /// NSUserDefaults key – BOOL; YES = use bundled IBM 3270 font
 NSString * const kPref3270FontEnabled = @"use3270Font";
@@ -156,6 +160,9 @@ static NSColor *colorFor5250Attr(uint8_t attr) {
     x3270::GraphicsBuffer* _graphics;   // GOCA drawing command list (3270 only)
     x3270::EbcdicCodec        _codec;
 
+    x3270::MacroRecorder _macroRecorder; // Macro recorder instance
+    std::unique_ptr<x3270::MacroRunner> _macroRunner; // Macro runner instance
+
     NSTimer* _cursorTimer;
     BOOL     _cursorVisible;
     NSArray<NSDictionary *> *_panelRules;
@@ -290,6 +297,9 @@ static NSColor *colorFor5250Attr(uint8_t attr) {
     _screen  = screen;
     _kbd     = kbd;
     _kbd5250 = nullptr;
+    if (_kbd) {
+        _kbd->setMacroRecorder(&_macroRecorder); // Hook recorder
+    }
     if (screen) {
         _rows = screen->rows();
         _cols = screen->cols();
@@ -301,6 +311,9 @@ static NSColor *colorFor5250Attr(uint8_t attr) {
     _screen  = screen;
     _kbd     = nullptr;
     _kbd5250 = kbd;
+    if (_kbd5250) {
+        _kbd5250->setMacroRecorder(&_macroRecorder); // Hook recorder
+    }
     if (screen) {
         _rows = screen->rows();
         _cols = screen->cols();
@@ -1617,5 +1630,106 @@ static constexpr CGFloat kGocaCellH = 12.0; // must match AH in buildQueryReply(
     [self.timeMachineHUD hide];
     [self setNeedsDisplay:YES];
 }
+
+#pragma mark - Macro Engine Actions
+
+- (IBAction)startRecordingMacro:(id)sender {
+    if (_macroRecorder.isRecording()) return;
+    _macroRecorder.startRecording("DX3270 Macro");
+    self.window.title = [self.window.title stringByAppendingString:@" [RECORDING ●]"];
+}
+
+- (IBAction)stopRecordingMacro:(id)sender {
+    if (!_macroRecorder.isRecording()) return;
+    _macroRecorder.stopRecording();
+    self.window.title = [self.window.title stringByReplacingOccurrencesOfString:@" [RECORDING ●]" withString:@""];
+    
+    NSSavePanel *savePanel = [NSSavePanel savePanel];
+    savePanel.title = @"Save Macro";
+
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    savePanel.allowedFileTypes = @[@"dxmacro"];
+#pragma clang diagnostic pop
+
+    savePanel.nameFieldStringValue = @"Untitled.dxmacro";
+    
+    [savePanel beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse result) {
+        if (result == NSModalResponseOK) {
+            x3270::MacroSerializer::saveToFile(self->_macroRecorder.script(), [savePanel.URL.path UTF8String]);
+        }
+        self->_macroRecorder.clear();
+    }];
+}
+
+- (IBAction)playMacro:(id)sender {
+    if (_macroRecorder.isRecording()) return;
+    if (_macroRunner && _macroRunner->state() == x3270::MacroRunnerState::Running) return;
+    
+    NSOpenPanel *openPanel = [NSOpenPanel openPanel];
+    openPanel.title = @"Select Macro to Play";
+
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    openPanel.allowedFileTypes = @[@"dxmacro"];
+#pragma clang diagnostic pop
+
+    // --- Create Accessory View for Playback Speed ---
+    NSView *accessory = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 260, 44)];
+    NSTextField *label = [NSTextField labelWithString:@"Playback Speed:"];
+    label.frame = NSMakeRect(0, 12, 110, 20);
+    [accessory addSubview:label];
+    
+    NSPopUpButton *speedPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(110, 10, 140, 24) pullsDown:NO];
+    [speedPopup addItemsWithTitles:@[@"Fast (Automation)", @"Normal (Real-time)", @"Presentation (Slow)"]];
+    [speedPopup selectItemAtIndex:1]; // Default to Normal
+    [accessory addSubview:speedPopup];
+    
+    openPanel.accessoryView = accessory;
+    openPanel.accessoryViewDisclosed = YES;
+    
+    [openPanel beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse result) {
+        if (result == NSModalResponseOK) {
+            x3270::MacroScript script;
+            if (x3270::MacroSerializer::loadFromFile([openPanel.URL.path UTF8String], script)) {
+                // Map the popup selection directly to the C++ enum
+                x3270::MacroPlaybackSpeed selectedSpeed = static_cast<x3270::MacroPlaybackSpeed>(speedPopup.indexOfSelectedItem);
+                [self executeScript:script withSpeed:selectedSpeed];
+            } else {
+                NSBeep();
+            }
+        }
+    }];
+}
+
+- (void)executeScript:(const x3270::MacroScript&)script withSpeed:(x3270::MacroPlaybackSpeed)speed {
+    _macroRunner = std::make_unique<x3270::MacroRunner>(*_screen, _kbd, _kbd5250);
+    
+    __weak typeof(self) weakSelf = self;
+    
+    _macroRunner->setCallbacks([weakSelf](x3270::MacroRunnerState state, const std::string& errorMsg) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            typeof(self) strongSelf = weakSelf;
+            if (!strongSelf) return;
+            
+            if (state == x3270::MacroRunnerState::Error) {
+                NSAlert *alert = [[NSAlert alloc] init];
+                alert.messageText = @"Macro Execution Error";
+                alert.informativeText = [NSString stringWithUTF8String:errorMsg.c_str()];
+                alert.alertStyle = NSAlertStyleWarning;
+                [alert beginSheetModalForWindow:strongSelf.window completionHandler:nil];
+            }
+            [strongSelf setNeedsDisplay:YES];
+        });
+    }, [weakSelf](size_t currentStep, size_t totalSteps) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [weakSelf setNeedsDisplay:YES];
+        });
+    });
+    
+    _macroRunner->loadScript(script);
+    _macroRunner->start(speed);
+}
+
 
 @end
