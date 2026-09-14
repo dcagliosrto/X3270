@@ -6,6 +6,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)commandDockDidRequestISPFCommand:(NSString *)command targetGroup:(nullable NSString *)group;
 - (void)commandDockDidRequestOutOdBandCommand:(NSString *)command targetGroup:(nullable NSString *)group;
 - (void)commandDockDidToggleRuler;
+- (void)commandDockDidToggleTimeMachine;
 @end
 
 @interface CommandDockViewController : NSViewController

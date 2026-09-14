@@ -7,7 +7,6 @@
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
     [self buildMenuBar];
-
     _connectionWindowController = [[ConnectionWindowController alloc] init];
     [_connectionWindowController showWindow:nil];
 }
@@ -16,7 +15,8 @@
     return YES;
 }
 
-// ── Menu Bar ─────────────────────────────────────────────────────────────────
+#pragma mark - Menu Bar
+
 - (void)buildMenuBar {
     NSMenu *menuBar = [[NSMenu alloc] init];
     [NSApp setMainMenu:menuBar];
@@ -26,21 +26,13 @@
     [menuBar addItem:appMenuItem];
     NSMenu *appMenu = [[NSMenu alloc] initWithTitle:@"DX3270"];
     appMenuItem.submenu = appMenu;
-    [appMenu addItemWithTitle:@"About DX3270"
-                       action:@selector(showAbout:)
-                keyEquivalent:@""];
+    [appMenu addItemWithTitle:@"About DX3270" action:@selector(showAbout:) keyEquivalent:@""];
     [appMenu addItem:[NSMenuItem separatorItem]];
-    [appMenu addItemWithTitle:@"Preferences…"
-                       action:@selector(openPreferences:)
-                keyEquivalent:@","];
+    [appMenu addItemWithTitle:@"Preferences..." action:@selector(openPreferences:) keyEquivalent:@","];
     [appMenu addItem:[NSMenuItem separatorItem]];
-    [appMenu addItemWithTitle:@"Keyboard Shortcuts…"
-                       action:@selector(openShortcuts:)
-                keyEquivalent:@"/"];
+    [appMenu addItemWithTitle:@"Keyboard Shortcuts" action:@selector(openShortcuts:) keyEquivalent:@"/"];
     [appMenu addItem:[NSMenuItem separatorItem]];
-    NSMenuItem *quitItem = [appMenu addItemWithTitle:@"Quit DX3270"
-                                             action:@selector(terminate:)
-                                      keyEquivalent:@"q"];
+    NSMenuItem *quitItem = [appMenu addItemWithTitle:@"Quit DX3270" action:@selector(terminate:) keyEquivalent:@"q"];
     quitItem.target = NSApp;
 
     // File menu
@@ -48,36 +40,30 @@
     [menuBar addItem:fileMenuItem];
     NSMenu *fileMenu = [[NSMenu alloc] initWithTitle:@"File"];
     fileMenuItem.submenu = fileMenu;
-    [fileMenu addItemWithTitle:@"New Connection…"
-                        action:@selector(newConnection:)
-                 keyEquivalent:@"n"];
+    [fileMenu addItemWithTitle:@"New Connection..." action:@selector(newConnection:) keyEquivalent:@"n"];
     [fileMenu addItem:[NSMenuItem separatorItem]];
-
-    NSMenuItem *transferItem =
-        [fileMenu addItemWithTitle:@"z/OS File Transfer Dock…"
-                            action:@selector(openTransferDock:)
-                     keyEquivalent:@"U"];   // ⌘⇧U
+    NSMenuItem *transferItem = [fileMenu addItemWithTitle:@"z/OS File Transfer Dock" action:@selector(openTransferDock:) keyEquivalent:@"U"];
     transferItem.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagShift;
-    
     [fileMenu addItem:[NSMenuItem separatorItem]];
-
-    NSMenuItem *screenshotItem =
-        [fileMenu addItemWithTitle:@"Save Screenshot…"
-                            action:@selector(saveScreenshot:)
-                     keyEquivalent:@"P"];   // ⌘⇧P (uppercase = Shift included)
+    NSMenuItem *screenshotItem = [fileMenu addItemWithTitle:@"Save Screenshot..." action:@selector(saveScreenshot:) keyEquivalent:@"P"];
     screenshotItem.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagShift;
-    NSMenuItem *exportItem =
-        [fileMenu addItemWithTitle:@"Export as Text…"
-                            action:@selector(exportText:)
-                     keyEquivalent:@"T"];   // ⌘⇧T
+    NSMenuItem *exportItem = [fileMenu addItemWithTitle:@"Export as Text..." action:@selector(exportText:) keyEquivalent:@"T"];
     exportItem.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagShift;
 
-    // Edit menu (for copy/paste system integration)
+    // View menu (Time-Machine)
+    NSMenuItem *viewMenuItem = [[NSMenuItem alloc] init];
+    [menuBar addItem:viewMenuItem];
+    NSMenu *viewMenu = [[NSMenu alloc] initWithTitle:@"View"];
+    viewMenuItem.submenu = viewMenu;
+    NSMenuItem *timeMachineItem = [viewMenu addItemWithTitle:@"3270 Time-Machine" action:@selector(toggleTimeMachine:) keyEquivalent:@"t"];
+    timeMachineItem.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagOption;
+
+    // Edit menu
     NSMenuItem *editMenuItem = [[NSMenuItem alloc] init];
     [menuBar addItem:editMenuItem];
     NSMenu *editMenu = [[NSMenu alloc] initWithTitle:@"Edit"];
     editMenuItem.submenu = editMenu;
-    [editMenu addItemWithTitle:@"Copy"  action:@selector(copy:)  keyEquivalent:@"c"];
+    [editMenu addItemWithTitle:@"Copy" action:@selector(copy:) keyEquivalent:@"c"];
     [editMenu addItemWithTitle:@"Paste" action:@selector(paste:) keyEquivalent:@"v"];
 
     // Debug menu
@@ -85,11 +71,17 @@
     [menuBar addItem:debugMenuItem];
     NSMenu *debugMenu = [[NSMenu alloc] initWithTitle:@"Debug"];
     debugMenuItem.submenu = debugMenu;
-    NSMenuItem *trafficItem =
-        [debugMenu addItemWithTitle:@"Traffic Monitor"
-                             action:@selector(openDebugWindow:)
-                      keyEquivalent:@"D"];   // ⌘⇧D (uppercase = Shift included)
+    NSMenuItem *trafficItem = [debugMenu addItemWithTitle:@"Traffic Monitor" action:@selector(openDebugWindow:) keyEquivalent:@"D"];
     trafficItem.keyEquivalentModifierMask = NSEventModifierFlagCommand;
+}
+
+#pragma mark - Actions
+
+- (void)toggleTimeMachine:(id)sender {
+    NSWindowController *activeWC = NSApp.keyWindow.windowController;
+    if ([activeWC respondsToSelector:@selector(toggleTimeMachine:)]) {
+        [activeWC performSelector:@selector(toggleTimeMachine:) withObject:sender];
+    }
 }
 
 - (void)newConnection:(id)sender {
@@ -101,21 +93,15 @@
     NSDictionary *info = [[NSBundle mainBundle] infoDictionary];
     NSString *version  = info[@"CFBundleShortVersionString"] ?: @"1.7.6";
     NSString *build    = info[@"CFBundleVersion"]            ?: @"1";
-
-    NSString *credits =
-        @"Free TN3270/TN3270E terminal emulator for macOS.\n\n"
-         "Native Cocoa · CoreText · OpenSSL\n"
-         "Supports ISPF, TSO and z/OS on IBM Mainframes.\n\n"
-         "Written by Swen Skalski\n"
-         "https://github.com/skalski/X3270";
-
+    NSString *credits = @"Free TN3270/TN3270E terminal emulator for macOS.\n\n"
+                         "Native Cocoa · CoreText · OpenSSL\n"
+                         "Supports ISPF, TSO and z/OS on IBM Mainframes.\n\n"
+                         "Written by Swen Skalski\n"
+                         "https://github.com/skalski/X3270";
     [NSApp orderFrontStandardAboutPanelWithOptions:@{
         @"ApplicationVersion": [NSString stringWithFormat:@"%@ (Build %@)", version, build],
-        @"Credits": [[NSAttributedString alloc]
-                        initWithString:credits
-                            attributes:@{NSFontAttributeName:
-                                [NSFont systemFontOfSize:11]}],
-        @"Copyright": @"Copyright \u00a9 2026 Swen Skalski",
+        @"Credits": [[NSAttributedString alloc] initWithString:credits attributes:@{NSFontAttributeName: [NSFont systemFontOfSize:11]}],
+        @"Copyright": @"Copyright © 2026 Swen Skalski",
     }];
 }
 

@@ -16,9 +16,14 @@
 @property (nonatomic, strong) NSTableView *completionTableView;
 @property (nonatomic, strong) NSArray<NSDictionary *> *currentMatches;
 @property (nonatomic, weak) NSTextField *activeSearchField;
+@property (nonatomic, strong) NSButton *timeMachineBtn;
 @end
 
 @implementation CommandDockViewController
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+}
 
 - (void)loadView {
     NSVisualEffectView *effectView = [[NSVisualEffectView alloc] initWithFrame:NSMakeRect(0, 0, 900, 36)];
@@ -102,12 +107,27 @@
     [self.ispfCommandField.widthAnchor constraintEqualToConstant:90].active = YES;
     [mainStack addArrangedSubview:self.ispfCommandField];
 
+    // Listen the changes in User Defaults in real-time
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(userDefaultsDidChange:)
+                                                 name:NSUserDefaultsDidChangeNotification
+                                               object:nil];
+
     // Ruler Toggle Button
     NSButton *rulerBtn = [NSButton buttonWithTitle:@"\u253C Ruler" target:self action:@selector(rulerButtonClicked:)];
     rulerBtn.toolTip = @"Toggle Crosshair Ruler for this session";
     rulerBtn.bezelStyle = NSBezelStyleInline;
     rulerBtn.controlSize = NSControlSizeSmall;
     [mainStack addArrangedSubview:rulerBtn];
+
+    // Time-Machine Button
+    self.timeMachineBtn = [NSButton buttonWithTitle:@"\u23F1 Time-Machine" target:self action:@selector(timeMachineButtonClicked:)];
+    self.timeMachineBtn.toolTip = @"Toggle 3270 Screen History & Diff (Cmd+Opt+T)";
+    self.timeMachineBtn.bezelStyle = NSBezelStyleInline;
+    self.timeMachineBtn.controlSize = NSControlSizeSmall;
+
+    [self updateTimeMachineButtonVisibility];
+    [mainStack addArrangedSubview:self.timeMachineBtn];
 
     // Spacer
     NSView *spacer = [[NSView alloc] init];
@@ -147,6 +167,20 @@
     if (![self.availableCommands isKindOfClass:[NSArray class]]) {
         self.availableCommands = @[];
     }
+}
+
+- (void)userDefaultsDidChange:(NSNotification *)note {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self updateTimeMachineButtonVisibility];
+    });
+}
+
+- (void)updateTimeMachineButtonVisibility {
+    BOOL tmEnabled = [[NSUserDefaults standardUserDefaults] objectForKey:@"DX3270_EnableTimeMachine"] 
+                     ? [[NSUserDefaults standardUserDefaults] boolForKey:@"DX3270_EnableTimeMachine"] 
+                     : YES;
+                     
+    self.timeMachineBtn.hidden = !tmEnabled;
 }
 
 #pragma mark - Group Selection & Actions
@@ -416,6 +450,13 @@
 - (void)rulerButtonClicked:(NSButton *)sender {
     if ([self.delegate respondsToSelector:@selector(commandDockDidToggleRuler)]) {
         [self.delegate commandDockDidToggleRuler];
+    }
+}
+
+
+- (void)timeMachineButtonClicked:(NSButton *)sender {
+    if ([self.delegate respondsToSelector:@selector(commandDockDidToggleTimeMachine)]) {
+        [self.delegate commandDockDidToggleTimeMachine];
     }
 }
 

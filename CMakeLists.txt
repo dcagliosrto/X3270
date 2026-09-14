@@ -48,6 +48,8 @@ set(UI_SOURCES
     src/ui/OOBPopoverViewController.mm
     src/ui/DataInspectorViewController.mm
     src/utils/ConfigLoader.mm
+    src/utils/TimeMachineManager.mm
+    src/ui/TimeMachineHUDView.mm
 )
 
 # ── App Bundle ────────────────────────────────────────────────────────────────

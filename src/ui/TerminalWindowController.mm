@@ -900,4 +900,14 @@ static NSString * const kDX3270BroadcastOOBNotification  = @"DX3270BroadcastOOBN
     }
 }
 
+- (IBAction)toggleTimeMachine:(id)sender {
+    if (_termView) {
+        [_termView toggleTimeMachine];
+    }
+}
+
+- (void)commandDockDidToggleTimeMachine {
+    [self toggleTimeMachine:nil];
+}
+
 @end

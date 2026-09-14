@@ -1,10 +1,12 @@
 #import "PreferencesWindowController.h"
 #import "TerminalView.h"
+#import "../utils/TimeMachineManager.h"
 
 @implementation PreferencesWindowController {
     NSButton *_use3270FontCheckbox;
     NSButton *_herculesBracketsCheckbox;
     NSButton *_crosshairRulerCheckbox;
+    NSButton *_timeMachineCheckbox;
     
     // Fast Paths UI properties
     NSTableView *_fastPathsTable;
@@ -15,9 +17,9 @@
     static PreferencesWindowController *shared = nil;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
-        // Increased window height to 580 to fit the new Fast Paths section
+        // Increased window height to 610 to fit the Time-Machine setting
         NSWindow *win = [[NSWindow alloc]
-                         initWithContentRect:NSMakeRect(0, 0, 420, 580)
+                         initWithContentRect:NSMakeRect(0, 0, 420, 610)
                                    styleMask:NSWindowStyleMaskTitled
                                             |NSWindowStyleMaskClosable
                                      backing:NSBackingStoreBuffered
@@ -68,17 +70,17 @@
     // ==========================================
     NSTextField *fontHeader = [NSTextField labelWithString:@"Terminal Font"];
     fontHeader.font = [NSFont boldSystemFontOfSize:13];
-    fontHeader.frame = NSMakeRect(margin, 540, 380, 20);
+    fontHeader.frame = NSMakeRect(margin, 570, 380, 20);
     [cv addSubview:fontHeader];
 
-    NSBox *sep1 = [[NSBox alloc] initWithFrame:NSMakeRect(margin, 534, 380, 1)];
+    NSBox *sep1 = [[NSBox alloc] initWithFrame:NSMakeRect(margin, 564, 380, 1)];
     sep1.boxType = NSBoxSeparator;
     [cv addSubview:sep1];
 
     _use3270FontCheckbox = [NSButton checkboxWithTitle:@"Use IBM 3270 font (by Ricardo Bánffy)"
                                                 target:self
                                                 action:@selector(fontCheckboxChanged:)];
-    _use3270FontCheckbox.frame = NSMakeRect(margin, 506, 380, 22);
+    _use3270FontCheckbox.frame = NSMakeRect(margin, 536, 380, 22);
     BOOL currentValue = [[NSUserDefaults standardUserDefaults] boolForKey:kPref3270FontEnabled];
     _use3270FontCheckbox.state = currentValue ? NSControlStateValueOn : NSControlStateValueOff;
     [cv addSubview:_use3270FontCheckbox];
@@ -89,7 +91,7 @@
          "IBM 3270 terminals."];
     note.textColor = [NSColor secondaryLabelColor];
     note.font = [NSFont systemFontOfSize:11];
-    note.frame = NSMakeRect(margin + 18, 456, 362, 44);
+    note.frame = NSMakeRect(margin + 18, 486, 362, 44);
     [cv addSubview:note];
 
     NSMutableAttributedString *linkTitle = [[NSMutableAttributedString alloc]
@@ -98,7 +100,7 @@
                 NSFontAttributeName:            [NSFont systemFontOfSize:11],
                 NSForegroundColorAttributeName: [NSColor linkColor],
             }];
-    NSButton *linkBtn = [[NSButton alloc] initWithFrame:NSMakeRect(margin + 18, 438, 362, 18)];
+    NSButton *linkBtn = [[NSButton alloc] initWithFrame:NSMakeRect(margin + 18, 468, 362, 18)];
     [linkBtn setAttributedTitle:linkTitle];
     linkBtn.buttonType = NSButtonTypeMomentaryLight;
     linkBtn.bordered = NO;
@@ -108,21 +110,21 @@
     [cv addSubview:linkBtn];
 
     // ==========================================
-    // Section: Compatibility
+    // Section: Compatibility & Features
     // ==========================================
-    NSTextField *compatHeader = [NSTextField labelWithString:@"Compatibility"];
+    NSTextField *compatHeader = [NSTextField labelWithString:@"Compatibility & Features"];
     compatHeader.font = [NSFont boldSystemFontOfSize:13];
-    compatHeader.frame = NSMakeRect(margin, 404, 380, 20);
+    compatHeader.frame = NSMakeRect(margin, 434, 380, 20);
     [cv addSubview:compatHeader];
 
-    NSBox *sep2 = [[NSBox alloc] initWithFrame:NSMakeRect(margin, 398, 380, 1)];
+    NSBox *sep2 = [[NSBox alloc] initWithFrame:NSMakeRect(margin, 428, 380, 1)];
     sep2.boxType = NSBoxSeparator;
     [cv addSubview:sep2];
 
     _herculesBracketsCheckbox = [NSButton checkboxWithTitle:@"Display Hercules-style EBCDIC brackets as [ ]"
                                                      target:self
                                                      action:@selector(herculesBracketsChanged:)];
-    _herculesBracketsCheckbox.frame = NSMakeRect(margin, 370, 380, 22);
+    _herculesBracketsCheckbox.frame = NSMakeRect(margin, 400, 380, 22);
     BOOL bracketsValue = [[NSUserDefaults standardUserDefaults] boolForKey:kPrefHerculesBrackets];
     _herculesBracketsCheckbox.state = bracketsValue ? NSControlStateValueOn : NSControlStateValueOff;
     [cv addSubview:_herculesBracketsCheckbox];
@@ -130,33 +132,39 @@
     NSTextField *compatNote = [NSTextField wrappingLabelWithString:
         @"For Hercules-hosted MVS (e.g. TK5) where the host code page is CP1047. "
          "Renders inbound 0xAD/0xBD (and 0x4A/0x5A) as [ and ], and sends typed "
-         "brackets as 0xAD/0xBD so the host stores them natively.\n\n"
-         "Note: ISPF EDIT may still display brackets as blank in its data row "
-         "because [ and ] fall outside its “displayable character set” — "
-         "this is a host-side filter, not a terminal bug. Use HEX ON or BROWSE "
-         "to confirm the bytes are stored correctly."];
+         "brackets as 0xAD/0xBD so the host stores them natively."];
     compatNote.textColor = [NSColor secondaryLabelColor];
     compatNote.font = [NSFont systemFontOfSize:11];
-    compatNote.frame = NSMakeRect(margin + 18, 310, 362, 56);
+    compatNote.frame = NSMakeRect(margin + 18, 352, 362, 44);
     [cv addSubview:compatNote];
 
     _crosshairRulerCheckbox = [NSButton checkboxWithTitle:@"Show Crosshair Ruler (Cursor Guide) by default"
                                                    target:self
                                                    action:@selector(crosshairRulerChanged:)];
-    _crosshairRulerCheckbox.frame = NSMakeRect(margin, 290, 380, 22);
+    _crosshairRulerCheckbox.frame = NSMakeRect(margin, 326, 380, 22);
     BOOL rulerValue = [[NSUserDefaults standardUserDefaults] boolForKey:kPrefCrosshairRuler];
     _crosshairRulerCheckbox.state = rulerValue ? NSControlStateValueOn : NSControlStateValueOff;
     [cv addSubview:_crosshairRulerCheckbox];
+
+    _timeMachineCheckbox = [NSButton checkboxWithTitle:@"Record screen history (Time-Machine & Diff)"
+                                                target:self
+                                                action:@selector(timeMachineChanged:)];
+    _timeMachineCheckbox.frame = NSMakeRect(margin, 300, 380, 22);
+    BOOL tmEnabled = [[NSUserDefaults standardUserDefaults] objectForKey:@"DX3270_EnableTimeMachine"] 
+                     ? [[NSUserDefaults standardUserDefaults] boolForKey:@"DX3270_EnableTimeMachine"] 
+                     : YES;
+    _timeMachineCheckbox.state = tmEnabled ? NSControlStateValueOn : NSControlStateValueOff;
+    [cv addSubview:_timeMachineCheckbox];
 
     // ==========================================
     // Section: Command Dock Fast Paths
     // ==========================================
     NSTextField *pathsHeader = [NSTextField labelWithString:@"ISPF Fast Paths"];
     pathsHeader.font = [NSFont boldSystemFontOfSize:13];
-    pathsHeader.frame = NSMakeRect(margin, 270, 380, 20);
+    pathsHeader.frame = NSMakeRect(margin, 260, 380, 20);
     [cv addSubview:pathsHeader];
 
-    NSBox *sepPaths = [[NSBox alloc] initWithFrame:NSMakeRect(margin, 264, 380, 1)];
+    NSBox *sepPaths = [[NSBox alloc] initWithFrame:NSMakeRect(margin, 254, 380, 1)];
     sepPaths.boxType = NSBoxSeparator;
     [cv addSubview:sepPaths];
 
@@ -165,11 +173,11 @@
          "Changes will be applied to new terminal connections."];
     pathsNote.textColor = [NSColor secondaryLabelColor];
     pathsNote.font = [NSFont systemFontOfSize:11];
-    pathsNote.frame = NSMakeRect(margin, 220, 380, 34);
+    pathsNote.frame = NSMakeRect(margin, 215, 380, 34);
     [cv addSubview:pathsNote];
 
     // Table View for Fast Paths
-    NSScrollView *scroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(margin, 100, 380, 110)];
+    NSScrollView *scroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(margin, 95, 380, 110)];
     scroll.hasVerticalScroller = YES;
     scroll.borderType = NSBezelBorder;
     scroll.autohidesScrollers = YES;
@@ -192,25 +200,25 @@
     scroll.documentView = _fastPathsTable;
     [cv addSubview:scroll];
 
-   // Add / Remove buttons
+    // Add / Remove buttons
     NSButton *addBtn = [NSButton buttonWithTitle:@"+" target:self action:@selector(addFastPath:)];
-    addBtn.frame = NSMakeRect(margin, 70, 32, 24);
+    addBtn.frame = NSMakeRect(margin, 65, 32, 24);
     addBtn.bezelStyle = NSBezelStyleSmallSquare;
     [cv addSubview:addBtn];
 
     NSButton *remBtn = [NSButton buttonWithTitle:@"-" target:self action:@selector(removeFastPath:)];
-    remBtn.frame = NSMakeRect(margin + 36, 70, 32, 24);
+    remBtn.frame = NSMakeRect(margin + 36, 65, 32, 24);
     remBtn.bezelStyle = NSBezelStyleSmallSquare;
     [cv addSubview:remBtn];
 
     // Move Up / Move Down buttons
     NSButton *upBtn = [NSButton buttonWithTitle:@"↑" target:self action:@selector(moveFastPathUp:)];
-    upBtn.frame = NSMakeRect(margin + 72, 70, 32, 24);
+    upBtn.frame = NSMakeRect(margin + 72, 65, 32, 24);
     upBtn.bezelStyle = NSBezelStyleSmallSquare;
     [cv addSubview:upBtn];
 
     NSButton *dnBtn = [NSButton buttonWithTitle:@"↓" target:self action:@selector(moveFastPathDown:)];
-    dnBtn.frame = NSMakeRect(margin + 108, 70, 32, 24);
+    dnBtn.frame = NSMakeRect(margin + 108, 65, 32, 24);
     dnBtn.bezelStyle = NSBezelStyleSmallSquare;
     [cv addSubview:dnBtn];
 
@@ -240,7 +248,6 @@
 }
 
 - (void)tableView:(NSTableView *)tableView setObjectValue:(id)object forTableColumn:(NSTableColumn *)tableColumn row:(NSInteger)row {
-    // Save edits (double click on a cell triggers this automatically)
     _fastPaths[row][tableColumn.identifier] = object;
     [self saveFastPaths];
 }
@@ -264,13 +271,10 @@
 
 - (void)moveFastPathUp:(id)sender {
     NSInteger row = _fastPathsTable.selectedRow;
-    
-    // Check if a valid row is selected and it's not already at the top
     if (row > 0 && row < (NSInteger)_fastPaths.count) {
         [_fastPaths exchangeObjectAtIndex:row withObjectAtIndex:row - 1];
         [_fastPathsTable reloadData];
         
-        // Keep the moved row selected
         NSIndexSet *newSelection = [NSIndexSet indexSetWithIndex:row - 1];
         [_fastPathsTable selectRowIndexes:newSelection byExtendingSelection:NO];
         
@@ -280,13 +284,10 @@
 
 - (void)moveFastPathDown:(id)sender {
     NSInteger row = _fastPathsTable.selectedRow;
-    
-    // Check if a valid row is selected and it's not already at the bottom
     if (row >= 0 && row < (NSInteger)_fastPaths.count - 1) {
         [_fastPaths exchangeObjectAtIndex:row withObjectAtIndex:row + 1];
         [_fastPathsTable reloadData];
         
-        // Keep the moved row selected
         NSIndexSet *newSelection = [NSIndexSet indexSetWithIndex:row + 1];
         [_fastPathsTable selectRowIndexes:newSelection byExtendingSelection:NO];
         
@@ -312,6 +313,11 @@
 - (void)crosshairRulerChanged:(NSButton *)sender {
     BOOL enabled = (sender.state == NSControlStateValueOn);
     [[NSUserDefaults standardUserDefaults] setBool:enabled forKey:kPrefCrosshairRuler];
+}
+
+- (void)timeMachineChanged:(NSButton *)sender {
+    BOOL enabled = (sender.state == NSControlStateValueOn);
+    [[NSUserDefaults standardUserDefaults] setBool:enabled forKey:@"DX3270_EnableTimeMachine"];
 }
 
 @end

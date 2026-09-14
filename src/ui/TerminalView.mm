@@ -5,6 +5,8 @@
 #include "GraphicsBuffer.h"
 #import "DataInspectorViewController.h"
 #import "../utils/ConfigLoader.h"
+#import "TimeMachineHUDView.h"
+#import "../utils/TimeMachineManager.h"
 #include <string>
 
 /// NSUserDefaults key – BOOL; YES = use bundled IBM 3270 font
@@ -139,6 +141,13 @@ static NSColor *colorFor5250Attr(uint8_t attr) {
     }
     return [NSColor colorWithRed:0.20 green:0.85 blue:0.20 alpha:1.0];
 }
+
+@interface TerminalView ()
+@property (nonatomic, strong) TimeMachineHUDView *timeMachineHUD;
+@property (nonatomic, assign) BOOL isTimeMachineActive;
+@property (nonatomic, assign) BOOL isDiffActive;
+@property (nonatomic, assign) NSInteger currentTimeMachineIndex;
+@end
 
 @implementation TerminalView {
     x3270::ScreenBuffer* _screen;
@@ -304,6 +313,7 @@ static NSColor *colorFor5250Attr(uint8_t attr) {
 
 - (void)screenDidUpdate {
     dispatch_async(dispatch_get_main_queue(), ^{
+        [self captureCurrentScreenSnapshot];
         [self setNeedsDisplay:YES];
     });
 }
@@ -321,6 +331,89 @@ static NSColor *colorFor5250Attr(uint8_t attr) {
 
 // ── Drawing ───────────────────────────────────────────────────────────────────
 - (void)drawRect:(NSRect)dirtyRect {
+
+    // --- TIME MACHINE MODE ---
+    if (self.isTimeMachineActive) {
+        ScreenSnapshot *snap = [[TimeMachineManager sharedManager] snapshotAtIndex:self.currentTimeMachineIndex];
+        if (!snap) return;
+
+        [_backgroundColor setFill];
+        NSRectFill(self.bounds);
+
+        NSSize pref = [self preferredSize];
+        CGFloat scaleX = self.bounds.size.width / pref.width;
+        CGFloat scaleY = self.bounds.size.height / pref.height;
+
+        [NSGraphicsContext saveGraphicsState];
+        NSAffineTransform *transform = [NSAffineTransform transform];
+        [transform scaleXBy:scaleX yBy:scaleY];
+        [transform concat];
+
+        CGFloat effectiveHeight = pref.height;
+        const unichar *chars = (const unichar *)snap.characterBuffer.bytes;
+        const uint32_t *attrs = (const uint32_t *)snap.attributeBuffer.bytes;
+
+        NSArray<NSNumber *> *diffMap = nil;
+        if (self.isDiffActive && self.currentTimeMachineIndex > 0) {
+            ScreenSnapshot *prevSnap = [[TimeMachineManager sharedManager] snapshotAtIndex:self.currentTimeMachineIndex - 1];
+            diffMap = [[TimeMachineManager sharedManager] compareSnapshot:snap withSnapshot:prevSnap];
+        }
+
+        for (int row = 0; row < snap.rows; ++row) {
+            for (int col = 0; col < snap.cols; ++col) {
+                int pos = row * snap.cols + col;
+                unichar uc = chars[pos];
+
+                CGFloat cx = col * _charW;
+                CGFloat cy = effectiveHeight - (row + 1) * _charH;
+
+                BOOL isModified = (diffMap && (NSUInteger)pos < diffMap.count && [diffMap[pos] integerValue] == CellDiffModified);
+
+                // Native Color for the 3270 screen
+                NSColor *nativeFg = _foregroundColor;
+                if (attrs) {
+                    uint32_t packed = attrs[pos];
+                    uint8_t colorType = (packed >> 16) & 0xFF;
+                    uint8_t colorVal  = (packed >> 8) & 0xFF;
+
+                    if (colorType == 1) {
+                        nativeFg = colorFor3270Code(colorVal) ?: _foregroundColor;
+                    } else if (colorType == 2) {
+                        switch (colorVal) {
+                            case 1:  nativeFg = _intensifiedColor; break;
+                            case 2:  nativeFg = [NSColor colorWithRed:0.22 green:0.52 blue:1.00 alpha:1.0]; break;
+                            case 3:  nativeFg = [NSColor colorWithRed:0.85 green:0.85 blue:0.85 alpha:1.0]; break;
+                            default: nativeFg = _foregroundColor; break;
+                        }
+                    } else if (colorType == 3) {
+                        nativeFg = colorFor5250Attr(colorVal);
+                    }
+                }
+
+                // Diff highlighting: Dark Amber Background + Golden Yellow Text
+                if (isModified) {
+                    [[NSColor colorWithCalibratedRed:0.45 green:0.20 blue:0.00 alpha:0.65] setFill];
+                    NSRectFill(NSMakeRect(cx, cy, _charW, _charH));
+                }
+
+                if (uc > 0x20) {
+                    NSString *ch = [NSString stringWithCharacters:&uc length:1];
+                    NSColor *textColor = isModified ? [NSColor colorWithCalibratedRed:1.0 green:0.92 blue:0.30 alpha:1.0] : nativeFg;
+                    NSDictionary *charAttrs = @{
+                        NSFontAttributeName: _terminalFont,
+                        NSForegroundColorAttributeName: textColor,
+                    };
+                    [ch drawAtPoint:NSMakePoint(cx, cy + _baseline) withAttributes:charAttrs];
+                }
+            }
+        }
+
+        [self drawOIA];
+        [NSGraphicsContext restoreGraphicsState];
+        return;
+    }
+
+    // --- LIVE STANDARD MODE ---
     [_backgroundColor setFill];
     NSRectFill(self.bounds);
 
@@ -1403,6 +1496,127 @@ static constexpr CGFloat kGocaCellH = 12.0; // must match AH in buildQueryReply(
 
 - (void)toggleCrosshairRuler {
     self.showCrosshairRuler = !self.showCrosshairRuler;
+    [self setNeedsDisplay:YES];
+}
+
+#pragma mark - Time Machine Engine
+
+- (void)captureCurrentScreenSnapshot {
+    BOOL recordingEnabled = [[NSUserDefaults standardUserDefaults] objectForKey:@"DX3270_EnableTimeMachine"] 
+                            ? [[NSUserDefaults standardUserDefaults] boolForKey:@"DX3270_EnableTimeMachine"] 
+                            : YES; // Enabled by default
+    if (!recordingEnabled) return;
+
+    if (self.isTimeMachineActive || !_screen) return;
+
+    int rows = _screen->rows();
+    int cols = _screen->cols();
+    if (rows <= 0 || cols <= 0) return;
+
+    unichar *chars = (unichar *)malloc(sizeof(unichar) * rows * cols);
+    uint32_t *attrs = (uint32_t *)malloc(sizeof(uint32_t) * rows * cols);
+
+    for (int r = 0; r < rows; r++) {
+        for (int c = 0; c < cols; c++) {
+            int pos = r * cols + c;
+            const x3270::Cell& cell = _screen->at(pos);
+            uint16_t uc = _codec.toUnicode(cell.ch);
+            chars[pos] = (uc >= 0x20) ? uc : ' ';
+
+            uint8_t colorType = 0; // 1=3270 ext, 2=3270 base, 3=5250
+            uint8_t colorVal = 0;
+
+            if (_kbd5250 != nil) {
+                int faIdx = _screen->findFieldStart(pos);
+                colorVal = (faIdx >= 0) ? _screen->at(faIdx).fgColor : 0x20;
+                colorType = 3;
+            } else if (cell.fgColor != 0x00) {
+                colorVal = cell.fgColor;
+                colorType = 1;
+            } else {
+                int faIdx = _screen->findFieldStart(pos);
+                uint8_t activeAttr = (faIdx >= 0) ? _screen->at(faIdx).attr : 0x00;
+                colorVal = ((activeAttr & 0x20) >> 4) | ((activeAttr & 0x08) >> 3);
+                colorType = 2;
+            }
+
+            attrs[pos] = ((uint32_t)colorType << 16) | ((uint32_t)colorVal << 8) | (uint32_t)cell.attr;
+        }
+    }
+
+    int curPos = _screen->cursorPos();
+    int curRow = curPos / cols;
+    int curCol = curPos % cols;
+
+    [[TimeMachineManager sharedManager] captureSnapshotWithRows:rows
+                                                           cols:cols
+                                                          chars:chars
+                                                     attributes:attrs
+                                                      cursorRow:curRow
+                                                      cursorCol:curCol];
+
+    free(chars);
+    free(attrs);
+}
+
+- (void)toggleTimeMachine {
+    BOOL tmEnabled = [[NSUserDefaults standardUserDefaults] objectForKey:@"DX3270_EnableTimeMachine"] 
+                     ? [[NSUserDefaults standardUserDefaults] boolForKey:@"DX3270_EnableTimeMachine"] 
+                     : YES;
+
+    // Se disabilitata e non è già attiva, emette un segnale acustico e ignora il comando
+    if (!tmEnabled && !self.isTimeMachineActive) {
+        NSBeep();
+        return;
+    }
+
+    if (self.isTimeMachineActive) {
+        [self timeMachineDidReturnToLive];
+    } else {
+        NSArray *snaps = [[TimeMachineManager sharedManager] allSnapshots];
+        if (snaps.count == 0) return;
+
+        self.isTimeMachineActive = YES;
+        self.currentTimeMachineIndex = snaps.count - 1;
+
+        if (!self.timeMachineHUD) {
+            self.timeMachineHUD = [[TimeMachineHUDView alloc] initWithFrame:NSZeroRect];
+            self.timeMachineHUD.delegate = self;
+        }
+
+        [self.timeMachineHUD showInParentView:self];
+        [self updateHUDState];
+        [self setNeedsDisplay:YES];
+    }
+}
+
+- (void)updateHUDState {
+    NSArray *snaps = [[TimeMachineManager sharedManager] allSnapshots];
+    if (snaps.count == 0) return;
+    
+    ScreenSnapshot *currentSnap = snaps[self.currentTimeMachineIndex];
+    [self.timeMachineHUD updateWithSnapshotsCount:snaps.count
+                                    currentIndex:self.currentTimeMachineIndex
+                                       timestamp:currentSnap.timestamp];
+}
+
+#pragma mark - TimeMachineHUDDelegate Implementation
+
+- (void)timeMachineDidSelectSnapshotAtIndex:(NSInteger)index {
+    self.currentTimeMachineIndex = index;
+    [self updateHUDState];
+    [self setNeedsDisplay:YES];
+}
+
+- (void)timeMachineDidToggleDiffMode:(BOOL)diffEnabled {
+    self.isDiffActive = diffEnabled;
+    [self setNeedsDisplay:YES];
+}
+
+- (void)timeMachineDidReturnToLive {
+    self.isTimeMachineActive = NO;
+    self.isDiffActive = NO;
+    [self.timeMachineHUD hide];
     [self setNeedsDisplay:YES];
 }
 
