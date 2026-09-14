@@ -47,6 +47,7 @@ set(UI_SOURCES
     src/ui/CommandDockViewController.mm
     src/ui/OOBPopoverViewController.mm
     src/ui/DataInspectorViewController.mm
+    src/utils/ConfigLoader.mm
 )
 
 # ── App Bundle ────────────────────────────────────────────────────────────────
@@ -112,6 +113,7 @@ set_target_properties(DX3270 PROPERTIES
 set(JSON_RESOURCES
     resources/commands.json
     resources/panel_rules.json
+    resources/patterns.json
 )
 target_sources(DX3270 PRIVATE ${JSON_RESOURCES})
 set_source_files_properties(${JSON_RESOURCES} PROPERTIES

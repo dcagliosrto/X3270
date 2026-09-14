@@ -1,5 +1,6 @@
 #import "CommandDockViewController.h"
 #import "OOBPopoverViewController.h"
+#import "../utils/ConfigLoader.h"
 
 @interface CommandDockViewController () <NSSearchFieldDelegate, NSTableViewDelegate, NSTableViewDataSource>
 @property (nonatomic, strong) NSPopUpButton *linkGroupPopUp;
@@ -138,22 +139,12 @@
     self.view = effectView;
 
     // ==========================================
-    // Load Autocomplete Commands from JSON
+    // Load Autocomplete Commands from JSON (Bundle + Local Overrides)
     // ==========================================
-    NSString *jsonPath = [[NSBundle mainBundle] pathForResource:@"commands" ofType:@"json"];
-    if (jsonPath) {
-        NSData *jsonData = [NSData dataWithContentsOfFile:jsonPath];
-        if (jsonData) {
-            NSError *error = nil;
-            self.availableCommands = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:&error];
-            if (error) {
-                NSLog(@"[DX3270] Failed to parse commands.json: %@", error.localizedDescription);
-            }
-        }
-    }
-    
+    self.availableCommands = [ConfigLoader loadMergedJSONNamed:@"commands.json"];
+
     // Fallback to empty array if file is missing or invalid
-    if (!self.availableCommands) {
+    if (![self.availableCommands isKindOfClass:[NSArray class]]) {
         self.availableCommands = @[];
     }
 }

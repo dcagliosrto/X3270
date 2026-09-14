@@ -50,4 +50,9 @@ extern NSString * const kPrefCrosshairRuler;
 @property (nonatomic, strong) NSColor *cursorColor;
 @property (nonatomic, strong) NSFont  *terminalFont;
 @property (nonatomic, assign) BOOL showCrosshairRuler;
+@property (nonatomic, assign) BOOL hasInspectedBlock;
+@property (nonatomic, assign) int inspectedMinRow;
+@property (nonatomic, assign) int inspectedMaxRow;
+@property (nonatomic, assign) int inspectedMinCol;
+@property (nonatomic, assign) int inspectedMaxCol;
 @end

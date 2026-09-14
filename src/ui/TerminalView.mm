@@ -4,6 +4,7 @@
 #include "EbcdicCodec.h"
 #include "GraphicsBuffer.h"
 #import "DataInspectorViewController.h"
+#import "../utils/ConfigLoader.h"
 #include <string>
 
 /// NSUserDefaults key – BOOL; YES = use bundled IBM 3270 font
@@ -190,23 +191,16 @@ static NSColor *colorFor5250Attr(uint8_t attr) {
                                                       userInfo:nil
                                                        repeats:YES];
 
-        // Load context rules from JSON
-        NSString *rulesPath = [[NSBundle mainBundle] pathForResource:@"panel_rules" ofType:@"json"];
-        if (rulesPath) {
-            NSData *data = [NSData dataWithContentsOfFile:rulesPath];
-            if (data) {
-                _panelRules = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-            }
-        }
-        
-        // Failsafe fallback
-        if (!_panelRules) {
+        // Load context rules from JSON (Bundle + Local Overrides)
+        _panelRules = [ConfigLoader loadMergedJSONNamed:@"panel_rules.json"];
+
+        // Failsafe fallback if missing or unparseable
+        if (![_panelRules isKindOfClass:[NSArray class]]) {
             _panelRules = @[
                 @{@"keywords": @[@"STATUS", @"HELD", @"DISPLAY ACTIVE", @"OUTPUT DISPLAY", @"INPUT QUEUE"], @"action": @"?"},
                 @{@"keywords": @[@"JOB DATA SET", @"DS DISPLAY"], @"action": @"S"}
             ];
         }
-
 
         // React to preference changes made in the Preferences window
         [[NSNotificationCenter defaultCenter]
@@ -493,27 +487,44 @@ static NSColor *colorFor5250Attr(uint8_t attr) {
         int curRow = curPos / _cols;
         int curCol = curPos % _cols;
         
-        // Calcola l'angolo in basso a sinistra della cella del cursore
+        // Calculate the bottom-left corner of the cursor cell
         CGFloat lineX = curCol * _charW; 
-        CGFloat lineY = effectiveHeight - (curRow + 1) * _charH; // Margine inferiore della riga
-        CGFloat textBottomY = effectiveHeight - _rows * _charH;  // Evita di coprire l'OIA
+        CGFloat lineY = effectiveHeight - (curRow + 1) * _charH; // Bottom margin of the row
+        CGFloat textBottomY = effectiveHeight - _rows * _charH;  // Avoid covering the OIA
         
-        // Colore rosso con il 40% di opacità
+        // Red color with 40% opacity
         [[NSColor colorWithRed:1.0 green:0.2 blue:0.2 alpha:0.4] setStroke];
         NSBezierPath *ruler = [NSBezierPath bezierPath];
         [ruler setLineWidth:2.0];
         
-        // Riga Orizzontale (Sottolinea la riga del cursore)
+        // Horizontal line (underline the cursor row)        
         [ruler moveToPoint:NSMakePoint(0, lineY)];
         [ruler lineToPoint:NSMakePoint(_cols * _charW, lineY)];
         
-        // Linea Verticale (Si allinea al margine sinistro del cursore)
+        // Vertical line (aligns with the left edge of the cursor)
         [ruler moveToPoint:NSMakePoint(lineX, effectiveHeight)];
         [ruler lineToPoint:NSMakePoint(lineX, textBottomY)];
         
         [ruler stroke];
     }
 
+    // --- NEW: Draw Red Bounding Box for Inspected Data ---
+    if (self.hasInspectedBlock && _screen) {
+        [[NSColor systemRedColor] setStroke];
+        NSBezierPath *box = [NSBezierPath bezierPath];
+        [box setLineWidth:1.5]; // Slightly thinner because the transform will thicken it
+        
+        // FIX: We are currently INSIDE the NSAffineTransform block!
+        // We must use the raw _charW, _charH, and effectiveHeight.
+        // The graphics context will automatically stretch the box to match the text.
+        CGFloat startX = self.inspectedMinCol * _charW;
+        CGFloat bottomY = effectiveHeight - ((self.inspectedMaxRow + 1) * _charH);
+        CGFloat width = (self.inspectedMaxCol - self.inspectedMinCol + 1) * _charW;
+        CGFloat height = (self.inspectedMaxRow - self.inspectedMinRow + 1) * _charH;
+        
+        [box appendBezierPathWithRect:NSMakeRect(startX, bottomY, width, height)];
+        [box stroke];
+    }
 
     // ── Draw GOCA graphics overlay ────────────────────────────────────────────
     if (_graphics && !_graphics->commands().empty()) {
@@ -933,11 +944,16 @@ static constexpr CGFloat kGocaCellH = 12.0; // must match AH in buildQueryReply(
     // --- NEW: Intercept Option + Click for Data Inspector ---
     if (([event modifierFlags] & NSEventModifierFlagOption) != 0) {
         if (offset >= 0) {
-            // Move the hardware cursor and selection so the ruler follows!
-            _screen->setCursor(offset);
-            _selStart = offset;
-            _selEnd = offset;
-            [self setNeedsDisplay:YES];
+            // Check if we are clicking INSIDE an active text selection
+            BOOL insideSelection = (_selStart >= 0 && _selEnd >= _selStart && offset >= _selStart && offset <= _selEnd);
+            
+            // If not inside a selection, collapse it to a single character click
+            if (!insideSelection) {
+                _screen->setCursor(offset);
+                _selStart = offset;
+                _selEnd = offset;
+                [self setNeedsDisplay:YES];
+            }
             
             [self showDataInspectorAtOffset:offset event:event];
         }
@@ -966,10 +982,49 @@ static constexpr CGFloat kGocaCellH = 12.0; // must match AH in buildQueryReply(
     NSMutableData *verticalHexBytes = [NSMutableData data];
     NSMutableString *verticalDecodedText = [NSMutableString string];
     
-    int maxBytes = 16;
     int maxScreenSize = _rows * _cols;
+    int minRow, maxRow, minCol, maxCol;
     
-    // Lambda to convert a Unicode character to its Hex value (0-15)
+    // Check if the click occurred inside an active multi-character selection
+    BOOL isBlockSelection = (_selStart >= 0 && _selEnd > _selStart && offset >= _selStart && offset <= _selEnd);
+    
+    if (isBlockSelection) {
+        // Calculate the Bounding Box (Min/Max Rows and Columns)
+        int r1 = _selStart / _cols;
+        int c1 = _selStart % _cols;
+        int r2 = _selEnd / _cols;
+        int c2 = _selEnd % _cols;
+        
+        minRow = MIN(r1, r2);
+        maxRow = MAX(r1, r2);
+        minCol = MIN(c1, c2);
+        maxCol = MAX(c1, c2);
+    } else {
+        // Fallback: 16 contiguous columns on the clicked row
+        minRow = offset / _cols;
+        maxRow = minRow;
+        minCol = offset % _cols;
+        maxCol = MIN(minCol + 15, _cols - 1);
+    }
+    
+    // --- Dynamic Bounds Cap ---
+    // Cap rows to prevent UI lag on massive vertical drags
+    if (maxRow - minRow > 50) maxRow = minRow + 50;
+    
+    // Dynamic column cap: allow selection up to the physical right edge of the current terminal grid
+    int maxAllowedCol = _cols - 1;
+    if (maxCol > maxAllowedCol) {
+        maxCol = maxAllowedCol;
+    }
+    
+    // Save block geometry for the red bounding box renderer
+    self.hasInspectedBlock = YES;
+    self.inspectedMinRow = minRow;
+    self.inspectedMaxRow = maxRow;
+    self.inspectedMinCol = minCol;
+    self.inspectedMaxCol = maxCol;
+    [self setNeedsDisplay:YES];
+    
     auto hexCharToInt = [](uint16_t c) -> int {
         if (c >= '0' && c <= '9') return c - '0';
         if (c >= 'A' && c <= 'F') return c - 'A' + 10;
@@ -977,38 +1032,55 @@ static constexpr CGFloat kGocaCellH = 12.0; // must match AH in buildQueryReply(
         return -1;
     };
     
-    for (int i = 0; i < maxBytes && (offset + i) < maxScreenSize; i++) {
-        // 1. Raw EBCDIC from the buffer
-        uint8_t byte = _screen->at(offset + i).ch;
-        [rawBytes appendBytes:&byte length:1];
+    // Extract data strictly within the calculated bounding box
+    for (int r = minRow; r <= maxRow; r++) {
         
-        // 2. Translated Text for Raw Buffer
-        uint16_t uc = _codec.toUnicode(byte);
-        if (uc >= 0x20) {
-            [decodedText appendFormat:@"%C", (unichar)uc];
-        } else {
-            [decodedText appendString:@"."];
-        }
+        // ISPF Hex uses the bottom two rows of a block.
+        // If it's a block selection, only evaluate Vertical Hex on the second-to-last row.
+        BOOL canCheckVertical = (!isBlockSelection) || (r == maxRow - 1);
         
-        // 3. ISPF Vertical Hex (Current row + Row below)
-        int posBottom = offset + _cols + i;
-        if (posBottom < maxScreenSize) {
-            uint16_t uTop = _codec.toUnicode(_screen->at(offset + i).ch);
-            uint16_t uBot = _codec.toUnicode(_screen->at(posBottom).ch);
+        for (int c = minCol; c <= maxCol; c++) {
+            int pos = r * _cols + c;
+            if (pos >= maxScreenSize) continue;
             
-            int hTop = hexCharToInt(uTop);
-            int hBot = hexCharToInt(uBot);
+            // 1. Raw EBCDIC Buffer
+            uint8_t byte = _screen->at(pos).ch;
+            [rawBytes appendBytes:&byte length:1];
             
-            if (hTop >= 0 && hBot >= 0 && verticalHexBytes.length == (NSUInteger)i) {
-                uint8_t vByte = (uint8_t)((hTop << 4) | hBot);
-                [verticalHexBytes appendBytes:&vByte length:1];
-                
-                // Decode the reconstructed vertical byte into EBCDIC text
-                uint16_t vUc = _codec.toUnicode(vByte);
-                if (vUc >= 0x20) {
-                    [verticalDecodedText appendFormat:@"%C", (unichar)vUc];
-                } else {
-                    [verticalDecodedText appendString:@"."];
+            // 2. Translated Text
+            uint16_t uc = _codec.toUnicode(byte);
+            if (uc >= 0x20) {
+                [decodedText appendFormat:@"%C", (unichar)uc];
+            } else {
+                [decodedText appendString:@"."];
+            }
+            
+            // 3. ISPF Vertical Hex (Strict Alignment)
+            if (canCheckVertical) {
+                int posBottom = pos + _cols;
+                if (posBottom < maxScreenSize) {
+                    uint16_t uTop = _codec.toUnicode(_screen->at(pos).ch);
+                    uint16_t uBot = _codec.toUnicode(_screen->at(posBottom).ch);
+                    
+                    int hTop = hexCharToInt(uTop);
+                    int hBot = hexCharToInt(uBot);
+                    
+                    if (hTop >= 0 && hBot >= 0) {
+                        uint8_t vByte = (uint8_t)((hTop << 4) | hBot);
+                        [verticalHexBytes appendBytes:&vByte length:1];
+                        
+                        uint16_t vUc = _codec.toUnicode(vByte);
+                        if (vUc >= 0x20) {
+                            [verticalDecodedText appendFormat:@"%C", (unichar)vUc];
+                        } else {
+                            [verticalDecodedText appendString:@"."];
+                        }
+                    } else {
+                        // FIX: Append a dummy byte to maintain string alignment if parsing fails
+                        uint8_t dummy = 0x00;
+                        [verticalHexBytes appendBytes:&dummy length:1];
+                        [verticalDecodedText appendString:@"."];
+                    }
                 }
             }
         }
@@ -1016,26 +1088,36 @@ static constexpr CGFloat kGocaCellH = 12.0; // must match AH in buildQueryReply(
     
     DataInspectorViewController *inspector = [[DataInspectorViewController alloc] initWithRawBytes:rawBytes decodedString:decodedText verticalHex:verticalHexBytes verticalDecodedString:verticalDecodedText];
     
-    if (_dataInspectorPopover) {
-        [_dataInspectorPopover close];
+    static NSPanel *inspectorPanel = nil;
+    
+    if (!inspectorPanel) {
+        inspectorPanel = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, 480, 450)
+                                                    styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskUtilityWindow | NSWindowStyleMaskResizable)
+                                                      backing:NSBackingStoreBuffered
+                                                        defer:NO];
+        inspectorPanel.title = @"Mainframe Data Inspector";
+        inspectorPanel.floatingPanel = YES;
+        inspectorPanel.releasedWhenClosed = NO;
+        inspectorPanel.hidesOnDeactivate = NO;
+        
+        // Listen for the window closing to clear the red bounding box
+        [[NSNotificationCenter defaultCenter] addObserverForName:NSWindowWillCloseNotification
+                                                          object:inspectorPanel
+                                                           queue:[NSOperationQueue mainQueue]
+                                                      usingBlock:^(NSNotification * _Nonnull note) {
+            self.hasInspectedBlock = NO;
+            [self setNeedsDisplay:YES];
+        }];
     }
     
-    _dataInspectorPopover = [[NSPopover alloc] init];
-    _dataInspectorPopover.contentViewController = inspector;
-    _dataInspectorPopover.behavior = NSPopoverBehaviorTransient;
+    inspectorPanel.contentViewController = inspector;
     
-    NSSize pref = [self preferredSize];
-    CGFloat scaleX = self.bounds.size.width / pref.width;
-    CGFloat scaleY = self.bounds.size.height / pref.height;
+    NSPoint screenPoint = [event.window convertPointToScreen:event.locationInWindow];
+    screenPoint.x += 15;
+    screenPoint.y -= 15;
     
-    int col = offset % _cols;
-    int row = offset / _cols;
-    
-    CGFloat scaledCharW = _charW * scaleX;
-    CGFloat scaledCharH = _charH * scaleY;
-    NSRect charRect = NSMakeRect(col * scaledCharW, self.bounds.size.height - (row + 1) * scaledCharH, scaledCharW, scaledCharH);
-    
-    [_dataInspectorPopover showRelativeToRect:charRect ofView:self preferredEdge:NSRectEdgeMaxY];
+    [inspectorPanel setFrameTopLeftPoint:screenPoint];
+    [inspectorPanel makeKeyAndOrderFront:nil];
 }
 
 - (void)mouseDragged:(NSEvent *)event {
