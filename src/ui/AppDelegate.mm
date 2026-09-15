@@ -15,6 +15,23 @@
     return YES;
 }
 
+- (BOOL)applicationShouldHandleReopen:(NSApplication *)sender hasVisibleWindows:(BOOL)flag {
+    if (!flag) {
+        // Look for active windows that are minimized and restore them
+        for (NSWindow *window in sender.windows) {
+            if (window.isMiniaturized) {
+                [window deminiaturize:self];
+                return YES;
+            }
+        }
+        
+        // If there are no active windows (not even minimized ones), reopen the start window
+        [self.connectionWindowController showWindow:nil];
+        return YES;
+    }
+    return YES;
+}
+
 #pragma mark - Menu Bar
 
 - (void)buildMenuBar {
