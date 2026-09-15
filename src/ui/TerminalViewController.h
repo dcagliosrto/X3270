@@ -1,21 +1,29 @@
 #pragma once
 #import <AppKit/AppKit.h>
-#import "TerminalViewController.h"
+#import "CommandDockViewController.h"
+#include "TerminalModel.h"
+#include "TerminalProtocol.h"
+#include "EbcdicCodec.h"
 
 NS_ASSUME_NONNULL_BEGIN
 
-/// A lightweight shell window that hosts a single TerminalViewController.
-/// Used for backwards compatibility with the "Quick Connect" feature.
-@interface TerminalWindowController : NSWindowController
+/// Reusable View Controller hosting a complete 3270/5250 session.
+/// Can be embedded in a standalone window or as a tab in a Workspace.
+@interface TerminalViewController : NSViewController <CommandDockDelegate>
 
-// The embedded reusable view controller
-@property (nonatomic, strong, readonly) TerminalViewController *terminalVC;
+// Session parameters
+@property (nonatomic, copy, readonly) NSString *host;
+@property (nonatomic, assign, readonly) uint16_t port;
 
-// Callbacks (Forwarded to the inner TerminalViewController)
+// Lifecycle Callbacks
 @property (nonatomic, copy, nullable) void(^onConnected)(void);
 @property (nonatomic, copy, nullable) void(^onConnectError)(NSString*);
 @property (nonatomic, copy, nullable) void(^onClosed)(void);
 
+// Exposed for broadcast/OOB routing
+@property (nonatomic, strong) CommandDockViewController *commandDock;
+
+// Initializer
 - (instancetype)initWithHost:(NSString*)host
                         port:(uint16_t)port
                       useSSL:(BOOL)useSSL
@@ -25,10 +33,14 @@ NS_ASSUME_NONNULL_BEGIN
                        model:(x3270::TerminalModel)model
                     protocol:(x3270::TerminalProtocol)protocol;
 
-// Forwarded native commands
+/// Safely disconnects the session and stops network threads.
+- (void)disconnectSession;
+
+// Native Actions
 - (IBAction)saveScreenshot:(id)sender;
 - (IBAction)exportText:(id)sender;
 - (IBAction)toggleVideoRecording:(id)sender;
+- (IBAction)toggleTimeMachine:(id)sender;
 - (void)toggleTransferSidebar:(id)sender;
 
 @end

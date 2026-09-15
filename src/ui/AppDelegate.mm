@@ -7,8 +7,17 @@
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
     [self buildMenuBar];
+    
+    // 1. Load the definitions (Sessions/Groups) from the JSON on the Mac (or create the default)
+    [[WorkspaceManager sharedManager] loadWorkspaces];
+    DXWorkspace *defaultWorkspace = [WorkspaceManager sharedManager].workspaces.firstObject;
+    
+    // 2. Run the Tab interface of the Workspace
+    _workspaceWindowController = [[WorkspaceWindowController alloc] initWithWorkspace:defaultWorkspace];
+    [_workspaceWindowController showWindow:nil];
+    
+    // (Leave available the Quick Connect for emergencies/flying creations via Cmd+N)
     _connectionWindowController = [[ConnectionWindowController alloc] init];
-    [_connectionWindowController showWindow:nil];
 }
 
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)sender {
@@ -139,8 +148,14 @@
 }
 
 - (void)newConnection:(id)sender {
-    ConnectionWindowController *cwc = [[ConnectionWindowController alloc] init];
-    [cwc showWindow:nil];
+    // Use the strong property of the AppDelegate to keep the Controller alive!
+    if (!_connectionWindowController) {
+        _connectionWindowController = [[ConnectionWindowController alloc] init];
+    }
+    
+    // Mostra la finestra e portala in primissimo piano
+    [_connectionWindowController showWindow:nil];
+    [_connectionWindowController.window makeKeyAndOrderFront:nil];
 }
 
 - (void)showAbout:(id)sender {

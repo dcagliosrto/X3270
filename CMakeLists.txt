@@ -36,25 +36,57 @@ set(CORE_SOURCES
     src/core/MacroRunner.cpp
 )
 
-set(UI_SOURCES
+set(UI_APP_SOURCES
     src/ui/main.mm
     src/ui/AppDelegate.mm
-    src/ui/ConnectionWindowController.mm
-    src/ui/DebugWindowController.mm
+)
+
+set(UI_TERMINAL_SOURCES
     src/ui/TerminalView.mm
+    src/ui/TerminalViewController.mm
     src/ui/TerminalWindowController.mm
-    src/ui/PreferencesWindowController.mm
-    src/ui/ShortcutsWindowController.mm
-    src/ui/TransferDockViewController.mm
+    src/ui/DebugWindowController.mm
+    src/ui/DataInspectorViewController.mm
     src/ui/CommandDockViewController.mm
     src/ui/OOBPopoverViewController.mm
-    src/ui/DataInspectorViewController.mm
+    src/ui/TransferDockViewController.mm
+    src/ui/TimeMachineHUDView.mm
+)
+
+set(UI_WORKSPACE_SOURCES
+    src/ui/WorkspaceViewController.mm
+    src/ui/WorkspaceWindowController.mm
+    src/ui/WorkspaceSidebarViewController.mm
+    src/ui/SessionEditViewController.mm
+)
+
+set(UI_SETTINGS_SOURCES
+    src/ui/ConnectionWindowController.mm
+    src/ui/PreferencesWindowController.mm
+    src/ui/ShortcutsWindowController.mm
+)
+
+set(UTILITY_SOURCES
     src/utils/ConfigLoader.mm
     src/utils/TimeMachineManager.mm
     src/utils/VideoRecorder.mm
-    src/ui/TimeMachineHUDView.mm
-    src/core/MacroSerializer.mm
+    src/utils/WorkspaceManager.mm
+)
 
+set(UI_SOURCES
+    ${UI_APP_SOURCES}
+    ${UI_TERMINAL_SOURCES}
+    ${UI_WORKSPACE_SOURCES}
+    ${UI_SETTINGS_SOURCES}
+    ${UTILITY_SOURCES}
+    src/core/MacroSerializer.mm
+    
+)
+
+# Keep the source tree hierarchical in IDE project views.
+source_group(TREE "${CMAKE_SOURCE_DIR}/src" PREFIX "src" FILES
+    ${CORE_SOURCES}
+    ${UI_SOURCES}
 )
 
 # ── App Bundle ────────────────────────────────────────────────────────────────
