@@ -32,6 +32,9 @@
 /// Export the current screen content as a UTF-8 plain-text file.
 - (IBAction)exportText:(id)sender;
 
+/// Toggle MP4 Video Recording of the terminal screen.
+- (IBAction)toggleVideoRecording:(id)sender;
+
 /// Toggle the visibility of the transfer sidebar.
 - (void)toggleTransferSidebar:(id)sender;
 

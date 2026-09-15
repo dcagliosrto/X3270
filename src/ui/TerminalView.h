@@ -48,6 +48,12 @@ extern NSString * const kPrefCrosshairRuler;
 - (void)toggleTimeMachine;
 - (void)captureCurrentScreenSnapshot;
 
+/// Video Export
+- (void)startVideoRecordingToURL:(NSURL *)url;
+- (void)stopVideoRecording;
+- (BOOL)isVideoRecording;
+
+
 /// Macro recording and playback actions
 - (IBAction)startRecordingMacro:(id)sender;
 - (IBAction)stopRecordingMacro:(id)sender;

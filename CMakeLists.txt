@@ -51,8 +51,10 @@ set(UI_SOURCES
     src/ui/DataInspectorViewController.mm
     src/utils/ConfigLoader.mm
     src/utils/TimeMachineManager.mm
+    src/utils/VideoRecorder.mm
     src/ui/TimeMachineHUDView.mm
     src/core/MacroSerializer.mm
+
 )
 
 # ── App Bundle ────────────────────────────────────────────────────────────────
@@ -85,6 +87,10 @@ target_link_libraries(DX3270 PRIVATE
     "-framework CoreGraphics"
     "-weak_framework UniformTypeIdentifiers"
     "-framework Security"
+    "-framework AVFoundation"  
+    "-framework CoreMedia"     
+    "-framework CoreVideo"     
+    "-framework ImageIO"
 )
 
 target_compile_options(DX3270 PRIVATE

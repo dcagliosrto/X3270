@@ -550,10 +550,50 @@ static NSString * const kDX3270BroadcastOOBNotification  = @"DX3270BroadcastOOBN
     }];
 }
 
+- (IBAction)toggleVideoRecording:(id)sender {
+    if ([_termView isVideoRecording]) {
+        [_termView stopVideoRecording];
+        self.window.title = [self.window.title stringByReplacingOccurrencesOfString:@" [RECORDING]" withString:@""];
+    } else {
+        NSSavePanel *panel = [NSSavePanel savePanel];
+        panel.title = @"Save Terminal Recording";
+        panel.nameFieldStringValue = @"DX3270_Demo";
+        panel.message = @"Export a video (MP4) or an animated image (GIF) of the session.";
+        
+        if (@available(macOS 11.0, *)) {
+            panel.allowedContentTypes = @[UTTypeMPEG4Movie, UTTypeGIF];
+        } else {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+            panel.allowedFileTypes = @[@"mp4", @"gif"];
+#pragma clang diagnostic pop
+        }
+        
+        [panel beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse result) {
+            if (result == NSModalResponseOK && panel.URL) {
+                [self->_termView startVideoRecordingToURL:panel.URL];
+                self.window.title = [self.window.title stringByAppendingString:@" [RECORDING]"];
+            }
+        }];
+    }
+}
+
+
 - (BOOL)validateMenuItem:(NSMenuItem *)item {
     SEL action = item.action;
     if (action == @selector(saveScreenshot:) ||
-        action == @selector(exportText:)) {
+        action == @selector(exportText:) ||
+        action == @selector(toggleVideoRecording:)) {
+        
+        // Dynamic renaming of the menu item
+        if (action == @selector(toggleVideoRecording:)) {
+            if ([_termView isVideoRecording]) {
+                item.title = @"Stop Video Recording";
+            } else {
+                item.title = @"Start Video Recording...";
+            }
+        }
+        
         return _session != nullptr;
     }
     return YES;

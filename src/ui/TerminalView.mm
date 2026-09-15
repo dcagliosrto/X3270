@@ -10,6 +10,7 @@
 #import "../utils/ConfigLoader.h"
 #import "TimeMachineHUDView.h"
 #import "../utils/TimeMachineManager.h"
+#include "../utils/VideoRecorder.h"
 #include <string>
 #include <memory>
 
@@ -162,6 +163,8 @@ static NSColor *colorFor5250Attr(uint8_t attr) {
 
     x3270::MacroRecorder _macroRecorder; // Macro recorder instance
     std::unique_ptr<x3270::MacroRunner> _macroRunner; // Macro runner instance
+    std::unique_ptr<x3270::VideoRecorder> _videoRecorder; // Video recorder instance
+    BOOL _isPendingVideoFrame; // Indicates if there is a pending video frame to be recorded
 
     NSTimer* _cursorTimer;
     BOOL     _cursorVisible;
@@ -1731,5 +1734,57 @@ static constexpr CGFloat kGocaCellH = 12.0; // must match AH in buildQueryReply(
     _macroRunner->start(speed);
 }
 
+- (void)startVideoRecordingToURL:(NSURL *)url {
+    if (!_videoRecorder) {
+        _videoRecorder = std::make_unique<x3270::VideoRecorder>();
+    }
+    _videoRecorder->startRecording(url.path.UTF8String, self.bounds.size.width, self.bounds.size.height);
+}
+
+- (void)stopVideoRecording {
+    if (_videoRecorder && _videoRecorder->isRecording()) {
+        _videoRecorder->stopRecording([]() {
+            NSLog(@"[DX3270] Esportazione video completata.");
+        });
+    }
+}
+
+- (BOOL)isVideoRecording {
+    return _videoRecorder && _videoRecorder->isRecording();
+}
+
+// =========================================================
+// GRAPHICS INTERCEPTION FOR VIDEO/GIF
+// =========================================================
+
+- (void)setNeedsDisplay:(BOOL)needsDisplay {
+    [super setNeedsDisplay:needsDisplay];
+    if (needsDisplay && [self isVideoRecording]) {
+        [self scheduleVideoFrameCapture];
+    }
+}
+
+- (void)setNeedsDisplayInRect:(NSRect)invalidRect {
+    [super setNeedsDisplayInRect:invalidRect];
+    if ([self isVideoRecording]) {
+        [self scheduleVideoFrameCapture];
+    }
+}
+
+- (void)scheduleVideoFrameCapture {
+    if (_isPendingVideoFrame) return; // Avoid duplicate frames within the same millisecond
+    _isPendingVideoFrame = YES;
+    
+    // Capture at the end of the current graphics cycle (Debounce)
+    dispatch_async(dispatch_get_main_queue(), ^{
+        self->_isPendingVideoFrame = NO;
+        if ([self isVideoRecording]) {
+            // Draw the current actual state of the view (including selection, cursor, input)
+            NSBitmapImageRep *rep = [self bitmapImageRepForCachingDisplayInRect:self.bounds];
+            [self cacheDisplayInRect:self.bounds toBitmapImageRep:rep];
+            self->_videoRecorder->appendFrame((void *)rep.CGImage);
+        }
+    });
+}
 
 @end

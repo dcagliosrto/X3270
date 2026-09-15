@@ -50,6 +50,11 @@
     NSMenuItem *exportItem = [fileMenu addItemWithTitle:@"Export as Text..." action:@selector(exportText:) keyEquivalent:@"T"];
     exportItem.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagShift;
 
+    // New video command (Cmd + Shift + V)
+    [fileMenu addItem:[NSMenuItem separatorItem]];
+    NSMenuItem *videoItem = [fileMenu addItemWithTitle:@"Start Video Recording..." action:@selector(toggleVideoRecording:) keyEquivalent:@"V"];
+    videoItem.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagShift;
+
     // View menu (Time-Machine)
     NSMenuItem *viewMenuItem = [[NSMenuItem alloc] init];
     [menuBar addItem:viewMenuItem];
@@ -106,6 +111,13 @@
     NSWindowController *activeWC = NSApp.keyWindow.windowController;
     if ([activeWC respondsToSelector:@selector(toggleTimeMachine:)]) {
         [activeWC performSelector:@selector(toggleTimeMachine:) withObject:sender];
+    }
+}
+
+- (void)toggleVideoRecording:(id)sender {
+    NSWindowController *activeWC = NSApp.keyWindow.windowController;
+    if ([activeWC respondsToSelector:@selector(toggleVideoRecording:)]) {
+        [activeWC performSelector:@selector(toggleVideoRecording:) withObject:sender];
     }
 }
 
