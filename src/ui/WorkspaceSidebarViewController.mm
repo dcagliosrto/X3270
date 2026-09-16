@@ -160,16 +160,22 @@
         editor.delegate = self;
         [self presentViewControllerAsSheet:editor];
         
-    } else if (clickedSegment == 1) { // [-] Rimuovi sessione
+    } else if (clickedSegment == 1) { // [-] Removes selected item
         NSInteger row = _outlineView.selectedRow;
         if (row >= 0) {
             id item = [_outlineView itemAtRow:row];
             if ([item isKindOfClass:[DXSessionConfig class]]) {
-                DXWorkspaceGroup *group = _workspace.groups.firstObject; // Per semplicità lavoriamo sul primo gruppo
-                [group.sessions removeObject:item];
-                [[WorkspaceManager sharedManager] saveWorkspaces];
-                [self reloadSidebar];
+                id parent = [_outlineView parentForItem:item];
+                if ([parent isKindOfClass:[DXWorkspaceGroup class]]) {
+                    [((DXWorkspaceGroup *)parent).sessions removeObject:item];
+                } else if (_workspace.groups.count > 0) {
+                    [_workspace.groups.firstObject.sessions removeObject:item];
+                }
+            } else if ([item isKindOfClass:[DXWorkspaceGroup class]]) {
+                [_workspace.groups removeObject:item];
             }
+            [[WorkspaceManager sharedManager] saveWorkspaces];
+            [self reloadSidebar];
         }
     } else if (clickedSegment == 2) { // [⚙️] Modifica sessione
         NSInteger row = _outlineView.selectedRow;

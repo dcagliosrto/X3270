@@ -185,6 +185,8 @@ void TLSTransport::disconnect() {
     // We do NOT call SSL_free() here, because the other thread is still inside SSL_read()!
     if (sock_ >= 0) {
         ::shutdown(sock_, SHUT_RDWR);
+        ::close(sock_); // Forcefully close the descriptor
+        sock_ = -1;
     }
 }
 

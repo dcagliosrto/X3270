@@ -9,11 +9,12 @@ NS_ASSUME_NONNULL_BEGIN
 @interface WorkspaceViewController : NSViewController <WorkspaceSidebarDelegate>
 
 @property (nonatomic, strong) DXWorkspace *workspace;
-@property (nonatomic, strong) NSTabViewController *tabViewController;
+@property (nonatomic, strong) NSTabView *tabView;
 @property (nonatomic, strong) NSSplitViewController *mainSplitController;
 
 - (instancetype)initWithWorkspace:(DXWorkspace *)workspace;
 - (void)disconnectAllSessions;
+- (void)closeActiveTab;
 
 @end
 

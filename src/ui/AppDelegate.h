@@ -7,5 +7,6 @@
 @interface AppDelegate : NSObject <NSApplicationDelegate>
 
 @property (nonatomic, strong) ConnectionWindowController *connectionWindowController;
-@property (nonatomic, strong) WorkspaceWindowController *workspaceWindowController;
+@property (nonatomic, strong) NSMutableSet<WorkspaceWindowController *> *workspaceWindows;
+
 @end

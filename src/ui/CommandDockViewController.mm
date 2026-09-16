@@ -32,37 +32,55 @@
     effectView.blendingMode = NSVisualEffectBlendingModeWithinWindow;
     effectView.state = NSVisualEffectStateActive;
     effectView.autoresizingMask = NSViewWidthSizable;
-
-    NSStackView *mainStack = [[NSStackView alloc] initWithFrame:effectView.bounds];
+    
+    // 1. SCROLLVIEW: Il segreto per non bloccare il ridimensionamento della finestra
+    NSScrollView *scrollView = [[NSScrollView alloc] initWithFrame:effectView.bounds];
+    scrollView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    scrollView.hasVerticalScroller = NO;
+    scrollView.hasHorizontalScroller = NO; // Nascondiamo le barre brutte, si usa lo swipe!
+    scrollView.drawsBackground = NO;
+    [effectView addSubview:scrollView];
+    
+    // 2. STACKVIEW: Contiene effettivamente tutti i bottoni
+    NSStackView *mainStack = [[NSStackView alloc] initWithFrame:NSZeroRect];
     mainStack.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     mainStack.alignment = NSLayoutAttributeCenterY;
     mainStack.edgeInsets = NSEdgeInsetsMake(4, 12, 4, 12);
     mainStack.spacing = 12;
-    mainStack.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-
+    mainStack.translatesAutoresizingMaskIntoConstraints = NO;
+    scrollView.documentView = mainStack;
+    
+    // 3. CONSTRAINTS: Facciamo espandere lo stack per riempire lo schermo, ma permettiamogli di eccedere
+    [NSLayoutConstraint activateConstraints:@[
+        [mainStack.heightAnchor constraintEqualToAnchor:scrollView.heightAnchor],
+        // Questo spinge la textfield di destra verso il margine, ma se la finestra
+        // è troppo stretta, permette allo stack di sbrodolare fuori (attivando lo scroll)
+        [mainStack.widthAnchor constraintGreaterThanOrEqualToAnchor:scrollView.widthAnchor]
+    ]];
+    
     // ==========================================
     // Selective Link Group Selector
     // ==========================================
     self.linkGroupPopUp = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
     self.linkGroupPopUp.controlSize = NSControlSizeSmall;
-    [self.linkGroupPopUp addItemsWithTitles:@[@"🔗 Only This", @"🔗 Group A", @"🔗 Group B"]];
+    [self.linkGroupPopUp addItemsWithTitles:@[@"  Only This", @"  Group A", @"  Group B"]];
     self.linkGroupPopUp.target = self;
     self.linkGroupPopUp.action = @selector(linkGroupChanged:);
     [mainStack addArrangedSubview:self.linkGroupPopUp];
-
+    
     NSBox *sep0 = [[NSBox alloc] init];
     sep0.boxType = NSBoxSeparator;
     [sep0.heightAnchor constraintEqualToConstant:16].active = YES;
     [mainStack addArrangedSubview:sep0];
-
+    
     // ==========================================
-    // 1. ISPF Navigation & Fast Paths
+    // ISPF Navigation & Fast Paths
     // ==========================================
     NSStackView *ispfStack = [[NSStackView alloc] init];
     ispfStack.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     ispfStack.spacing = 4;
-
-    NSArray *navTitles = @[@"◀ Prev", @"Next ▶", @"List ≡", @"New +"];
+    
+    NSArray *navTitles = @[@"  Prev", @"Next  ", @"List  ", @"New +"];
     NSArray *navCommands = @[@"SWAP PREV", @"SWAP NEXT", @"SWAP LIST", @"START"];
     
     for (NSUInteger i = 0; i < navTitles.count; i++) {
@@ -77,7 +95,7 @@
     sep1.boxType = NSBoxSeparator;
     [sep1.heightAnchor constraintEqualToConstant:16].active = YES;
     [ispfStack addArrangedSubview:sep1];
-
+    
     // Dynamic Fast Paths
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
     NSArray *fastPaths = [defaults arrayForKey:@"DX3270_FastPaths"];
@@ -96,74 +114,66 @@
         btn.identifier = path[@"cmd"];
         [ispfStack addArrangedSubview:btn];
     }
-
     [mainStack addArrangedSubview:ispfStack];
     
-    // ISPF Direct Input
+    // ISPF Direct Input (Ripristinate le misure rigide corrette)
     self.ispfCommandField = [[NSSearchField alloc] init];
     self.ispfCommandField.placeholderString = @"ISPF Cmd...";
     self.ispfCommandField.delegate = self;
     self.ispfCommandField.controlSize = NSControlSizeSmall;
     [self.ispfCommandField.widthAnchor constraintEqualToConstant:90].active = YES;
     [mainStack addArrangedSubview:self.ispfCommandField];
-
-    // Listen the changes in User Defaults in real-time
+    
     [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(userDefaultsDidChange:)
                                                  name:NSUserDefaultsDidChangeNotification
                                                object:nil];
-
+    
     // Ruler Toggle Button
-    NSButton *rulerBtn = [NSButton buttonWithTitle:@"\u253C Ruler" target:self action:@selector(rulerButtonClicked:)];
+    NSButton *rulerBtn = [NSButton buttonWithTitle:@"╼ Ruler" target:self action:@selector(rulerButtonClicked:)];
     rulerBtn.toolTip = @"Toggle Crosshair Ruler for this session";
     rulerBtn.bezelStyle = NSBezelStyleInline;
     rulerBtn.controlSize = NSControlSizeSmall;
     [mainStack addArrangedSubview:rulerBtn];
-
+    
     // Time-Machine Button
-    self.timeMachineBtn = [NSButton buttonWithTitle:@"\u23F1 Time-Machine" target:self action:@selector(timeMachineButtonClicked:)];
+    self.timeMachineBtn = [NSButton buttonWithTitle:@"⏱ Time-Machine" target:self action:@selector(timeMachineButtonClicked:)];
     self.timeMachineBtn.toolTip = @"Toggle 3270 Screen History & Diff (Cmd+Opt+T)";
     self.timeMachineBtn.bezelStyle = NSBezelStyleInline;
     self.timeMachineBtn.controlSize = NSControlSizeSmall;
-
     [self updateTimeMachineButtonVisibility];
     [mainStack addArrangedSubview:self.timeMachineBtn];
-
-    // Spacer
+    
+    // Spacer (Si accorcia e si allunga per spingere OOB a destra)
     NSView *spacer = [[NSView alloc] init];
     [spacer setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
     [mainStack addArrangedSubview:spacer];
-
+    
     // ==========================================
     // Out-of-Band SSH Executor
     // ==========================================
     NSStackView *oobStack = [[NSStackView alloc] init];
     oobStack.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     oobStack.spacing = 6;
-
+    
     NSTextField *oobLabel = [NSTextField labelWithString:@"SSH/OOB:"];
     oobLabel.font = [NSFont systemFontOfSize:11 weight:NSFontWeightMedium];
     oobLabel.textColor = [NSColor colorWithWhite:0.7 alpha:1.0];
     [oobStack addArrangedSubview:oobLabel];
-
+    
+    // OOB Direct Input (Ripristinate le misure rigide corrette)
     self.oobCommandField = [[NSSearchField alloc] init];
     self.oobCommandField.placeholderString = @"TSO / System...";
     self.oobCommandField.delegate = self;
     self.oobCommandField.controlSize = NSControlSizeSmall;
     [self.oobCommandField.widthAnchor constraintEqualToConstant:300].active = YES;
     [oobStack addArrangedSubview:self.oobCommandField];
-
+    
     [mainStack addArrangedSubview:oobStack];
-
-    [effectView addSubview:mainStack];
+    
     self.view = effectView;
-
-    // ==========================================
-    // Load Autocomplete Commands from JSON (Bundle + Local Overrides)
-    // ==========================================
+    
     self.availableCommands = [ConfigLoader loadMergedJSONNamed:@"commands.json"];
-
-    // Fallback to empty array if file is missing or invalid
     if (![self.availableCommands isKindOfClass:[NSArray class]]) {
         self.availableCommands = @[];
     }

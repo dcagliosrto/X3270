@@ -273,6 +273,22 @@ static NSColor *colorFor5250Attr(uint8_t attr) {
     [[NSNotificationCenter defaultCenter] removeObserver:self];
 }
 
+- (void)viewWillMoveToWindow:(NSWindow *)newWindow {
+    [super viewWillMoveToWindow:newWindow];
+    if (newWindow == nil) {
+        // The view is being removed from the screen: stop the timer to break the retain cycle
+        [_cursorTimer invalidate];
+        _cursorTimer = nil;
+    } else if (_cursorTimer == nil) {
+        // The view becomes visible again (e.g., tab change): restart the timer
+        _cursorTimer = [NSTimer scheduledTimerWithTimeInterval:0.6
+                                                        target:self
+                                                      selector:@selector(blinkCursor:)
+                                                      userInfo:nil
+                                                       repeats:YES];
+    }
+}
+
 - (void)recalcCellSize {
     CTFontRef ctFont = (__bridge CTFontRef)_terminalFont;
 
@@ -359,16 +375,10 @@ static NSColor *colorFor5250Attr(uint8_t attr) {
         NSSize pref = [self preferredSize];
         CGFloat scaleX = self.bounds.size.width / pref.width;
         CGFloat scaleY = self.bounds.size.height / pref.height;
-        CGFloat scale = MIN(scaleX, scaleY); // <-- Scala proporzionale!
         
-        // Calculate the offset to center the grid
-        CGFloat dX = (self.bounds.size.width - (pref.width * scale)) / 2.0;
-        CGFloat dY = (self.bounds.size.height - (pref.height * scale)) / 2.0;
-
         [NSGraphicsContext saveGraphicsState];
         NSAffineTransform *transform = [NSAffineTransform transform];
-        [transform translateXBy:dX yBy:dY];
-        [transform scaleXBy:scale yBy:scale];
+        [transform scaleXBy:scaleX yBy:scaleY];
         [transform concat];
 
         CGFloat effectiveHeight = pref.height;
@@ -447,15 +457,10 @@ static NSColor *colorFor5250Attr(uint8_t attr) {
     NSSize pref = [self preferredSize];
     CGFloat scaleX = self.bounds.size.width / pref.width;
     CGFloat scaleY = self.bounds.size.height / pref.height;
-    CGFloat scale = MIN(scaleX, scaleY); // <-- Scala proporzionale!
     
-    // Calculate the offset to center the grid
-    CGFloat dX = (self.bounds.size.width - (pref.width * scale)) / 2.0;
-    CGFloat dY = (self.bounds.size.height - (pref.height * scale)) / 2.0;
     [NSGraphicsContext saveGraphicsState];
     NSAffineTransform *transform = [NSAffineTransform transform];
-    [transform translateXBy:dX yBy:dY];
-    [transform scaleXBy:scale yBy:scale];
+    [transform scaleXBy:scaleX yBy:scaleY];
     [transform concat];
     
     CGFloat effectiveHeight = pref.height;
@@ -1039,19 +1044,9 @@ static constexpr CGFloat kGocaCellH = 12.0; // must match AH in buildQueryReply(
     NSSize pref = [self preferredSize];
     CGFloat scaleX = self.bounds.size.width / pref.width;
     CGFloat scaleY = self.bounds.size.height / pref.height;
-    CGFloat scale = MIN(scaleX, scaleY);
     
-    CGFloat dX = (self.bounds.size.width - (pref.width * scale)) / 2.0;
-    CGFloat dY = (self.bounds.size.height - (pref.height * scale)) / 2.0;
-    
-    // Remove the offset and scale the real coordinates
-    CGFloat realX = (pt.x - dX) / scale;
-    CGFloat realY = (pt.y - dY) / scale;
-    
-    // If you click on the black borders outside the terminal, ignore the click
-    if (realX < 0 || realX >= pref.width || realY < 0 || realY >= pref.height) {
-        return -1;
-    }
+    CGFloat realX = pt.x / scaleX;
+    CGFloat realY = pt.y / scaleY;
     
     int col = (int)(realX / _charW);
     int row = (int)((pref.height - realY) / _charH);

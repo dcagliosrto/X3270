@@ -5,7 +5,6 @@
 #import "TerminalView.h"
 #import "DebugWindowController.h"
 
-// Include your C++ engine headers here...
 #include "ITerminalSession.h"
 #include "TN3270Session.h"
 #include "TN5250Session.h"
@@ -19,8 +18,8 @@
 #include "TerminalProtocol.h"
 #include <memory>
 #include <thread>
+#include <atomic>
 
-// Broadcast notification constants
 static NSString * const kDX3270BroadcastISPFNotification = @"DX3270BroadcastISPFNotification";
 static NSString * const kDX3270BroadcastOOBNotification  = @"DX3270BroadcastOOBNotification";
 
@@ -37,18 +36,21 @@ static NSString * const kDX3270BroadcastOOBNotification  = @"DX3270BroadcastOOBN
     DebugWindowController *_debugWC;
     TransferDockViewController *_transferDockVC;
     
-    // C++ Engine Objects
-    std::unique_ptr<x3270::ScreenBuffer>          _screen;
-    std::unique_ptr<x3270::GraphicsBuffer>        _graphics;
-    std::unique_ptr<x3270::EbcdicCodec>           _codec;
-    std::unique_ptr<x3270::DataStreamParser>      _parser3270;
-    std::unique_ptr<x3270::DataStream5250Parser>  _parser5250;
-    std::unique_ptr<x3270::KeyboardState>         _kbd3270;
-    std::unique_ptr<x3270::KeyboardState5250>     _kbd5250;
-    std::unique_ptr<x3270::ITerminalSession>      _session;
+    // Engine C++
+    std::shared_ptr<x3270::ScreenBuffer>          _screen;
+    std::shared_ptr<x3270::GraphicsBuffer>        _graphics;
+    std::shared_ptr<x3270::EbcdicCodec>           _codec;
+    std::shared_ptr<x3270::DataStreamParser>      _parser3270;
+    std::shared_ptr<x3270::DataStream5250Parser>  _parser5250;
+    std::shared_ptr<x3270::KeyboardState>         _kbd3270;
+    std::shared_ptr<x3270::KeyboardState5250>     _kbd5250;
+    
+    std::shared_ptr<x3270::ITerminalSession>      _session;
     
     std::thread _networkThread;
-    BOOL        _userClosed;
+    
+    std::atomic<bool> _isClosing;
+    BOOL _isConnecting;
     
     // Config
     BOOL       _useSSL;
@@ -67,7 +69,7 @@ static NSString * const kDX3270BroadcastOOBNotification  = @"DX3270BroadcastOOBN
                     codePage:(x3270::CodePage)codePage
                        model:(x3270::TerminalModel)model
                     protocol:(x3270::TerminalProtocol)protocol {
-    
+         
     if (self = [super initWithNibName:nil bundle:nil]) {
         _host = [host copy];
         _port = port;
@@ -77,8 +79,8 @@ static NSString * const kDX3270BroadcastOOBNotification  = @"DX3270BroadcastOOBN
         _codePage = codePage;
         _model = model;
         _protocol = protocol;
+        _isClosing = false;
         
-        // Observers
         [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(userDefaultsDidChange:) name:NSUserDefaultsDidChangeNotification object:nil];
         [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(handleBroadcastISPFCommand:) name:kDX3270BroadcastISPFNotification object:nil];
         [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(handleBroadcastOOBCommand:) name:kDX3270BroadcastOOBNotification object:nil];
@@ -92,24 +94,44 @@ static NSString * const kDX3270BroadcastOOBNotification  = @"DX3270BroadcastOOBN
 }
 
 - (void)disconnectSession {
-    _userClosed = YES;
-    if (_session) _session->disconnect();
-    if (_networkThread.joinable()) _networkThread.detach();
+    if (_isClosing.exchange(true)) return; // Prevent multiple calls
+    
+    // 1. Immediately disconnect the session. This interrupts blocking socket calls.
+    if (_session) {
+        _session->disconnect();
+    }
+    
+    // 2. Clear view callbacks immediately to prevent background threads from touching the UI
+    if (_session) {
+        _session->setDataCallback(nullptr);
+        _session->setConnectedCallback(nullptr);
+        _session->setErrorCallback(nullptr);
+        _session->setTrafficCallback(nullptr);
+    }
+    
+    // 3. Nullify pointers to C++ objects in the view
+    if (_termView) {
+        [_termView setScreenBuffer:nullptr keyboardState:nullptr];
+        [_termView setScreenBuffer:nullptr keyboardState5250:nullptr];
+        [_termView setGraphicsBuffer:nullptr];
+    }
+    
+    // 4. Safely wait for the background thread to finish its work
+    if (_networkThread.joinable()) {
+        _networkThread.join();
+    }
+    
     if (self.onClosed) self.onClosed();
 }
 
 - (void)loadView {
-    // 1. Create the root container view
     self.view = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 640, 420)];
     
-    // 2. Set the dynamic Title for Tabs/Windows
     NSString *protoLabel = (_protocol == x3270::TerminalProtocol::TN5250) ? @" [5250]" : @"";
     self.title = [NSString stringWithFormat:@"%@:%d%@ - DX3270", _host, _port, protoLabel];
     
-    // 3. Initialize the Engine
     [self buildEngineObjects];
     
-    // 4. Build the UI
     _termView = [[TerminalView alloc] initWithFrame:NSZeroRect];
     [_termView setCodePage:_codePage];
     
@@ -126,7 +148,6 @@ static NSString * const kDX3270BroadcastOOBNotification  = @"DX3270BroadcastOOBN
     NSStackView *terminalStack = [[NSStackView alloc] init];
     terminalStack.orientation = NSUserInterfaceLayoutOrientationVertical;
     terminalStack.spacing = 0;
-    terminalStack.alignment = NSLayoutAttributeWidth;
     
     [_termView setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationVertical];
     [terminalStack addArrangedSubview:_termView];
@@ -154,38 +175,18 @@ static NSString * const kDX3270BroadcastOOBNotification  = @"DX3270BroadcastOOBN
     [self.splitViewController addSplitViewItem:mainItem];
     [self.splitViewController addSplitViewItem:self.sidebarSplitItem];
     
-    // 5. Embed the SplitView into this ViewController
     [self addChildViewController:self.splitViewController];
-    
-    // IL FIX VERO È QUI: 
-    // Usiamo AutoLayout per dire a TUTTO il blocco di rispettare la Safe Area in alto!
-    self.splitViewController.view.translatesAutoresizingMaskIntoConstraints = NO;
+    self.splitViewController.view.frame = self.view.bounds;
+    self.splitViewController.view.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     [self.view addSubview:self.splitViewController.view];
-    
-    [NSLayoutConstraint activateConstraints:@[
-        [self.splitViewController.view.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor],
-        [self.splitViewController.view.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
-        [self.splitViewController.view.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
-        [self.splitViewController.view.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor]
-    ]];
 }
 
 - (void)viewDidAppear {
     [super viewDidAppear];
-    if (!_session || !_session->isConnected()) {
-        [self startNetworkConnection]; // <-- Your existing network thread start
+    if (!_session || (!_session->isConnected() && !_isConnecting && !_isClosing)) {
+        [self startNetworkConnection];
     }
 }
-
-// =========================================================================
-// PASTE YOUR EXISTING METHODS BELOW THIS LINE
-// -> buildEngineObjects
-// -> startNetworkConnection
-// -> toggleTransferSidebar
-// -> saveScreenshot, exportText, toggleVideoRecording
-// -> commandDockDidRequest... and ALL handleBroadcast... logic
-// NOTE: Replace `self.window.title` with `self.title`
-// =========================================================================
 
 - (void)userDefaultsDidChange:(NSNotification *)note {
     BOOL brackets = [[NSUserDefaults standardUserDefaults] boolForKey:kPrefHerculesBrackets];
@@ -194,67 +195,169 @@ static NSString * const kDX3270BroadcastOOBNotification  = @"DX3270BroadcastOOBN
 }
 
 - (void)buildEngineObjects {
-    _screen = std::make_unique<x3270::ScreenBuffer>(_model);
-    _codec = std::make_unique<x3270::EbcdicCodec>(_codePage);
+    // Note: We use std::shared_ptr here so that copies passed into blocks keep the objects alive
+    _screen = std::make_shared<x3270::ScreenBuffer>(_model);
+    _codec = std::make_shared<x3270::EbcdicCodec>(_codePage);
     BOOL brackets = [[NSUserDefaults standardUserDefaults] boolForKey:kPrefHerculesBrackets];
     _codec->setHerculesBrackets(brackets);
     _debugWC = [[DebugWindowController alloc] init];
     [_debugWC configureCodePage:(int)_codePage herculesBrackets:brackets];
-
+    
     __weak TerminalViewController *weakSelf = self;
+    
     if (_protocol == x3270::TerminalProtocol::TN5250) {
-        auto *session5250 = new x3270::TN5250Session();
+        auto session5250 = std::make_shared<x3270::TN5250Session>();
         session5250->setModel(_model);
-        _session.reset(session5250);
-        _parser5250 = std::make_unique<x3270::DataStream5250Parser>(*_screen);
-        _kbd5250 = std::make_unique<x3270::KeyboardState5250>(*_screen, *_codec);
-        _parser5250->setUnlockCallback([weakSelf]() { dispatch_async(dispatch_get_main_queue(), ^{ __strong auto s = weakSelf; if (s) s->_kbd5250->unlock(); }); });
-        _parser5250->setAlarmCallback([]() { dispatch_async(dispatch_get_main_queue(), ^{ NSBeep(); }); });
-        _parser5250->setSendCallback([weakSelf](const std::vector<uint8_t> &payload) { __strong auto s = weakSelf; if (s) s->_session->sendRecord(payload); });
-        _parser5250->setQueryReplyCallback([weakSelf, session5250](const std::vector<uint8_t> &payload) { __strong auto s = weakSelf; if (s) session5250->sendGdsRecord(payload, x3270::GDS_OP_NO_OP); });
-        _kbd5250->setSendCallback([weakSelf](const std::vector<uint8_t> &record) -> bool { __strong auto s = weakSelf; return s ? s->_session->sendRecord(record) : false; });
-        _session->setDataCallback([weakSelf](const std::vector<uint8_t> &record) {
-            __strong auto s = weakSelf; if (!s) return;
-            if (record.size() >= 10 && (record[9] == 0x01 || record[9] == 0x03)) dispatch_async(dispatch_get_main_queue(), ^{ __strong auto s2 = weakSelf; if (s2) s2->_kbd5250->unlock(); });
-            s->_parser5250->processRecord(record);
-            dispatch_async(dispatch_get_main_queue(), ^{ __strong auto s2 = weakSelf; if (s2) [s2->_termView screenDidUpdate]; });
+        _session = session5250;
+        
+        _parser5250 = std::make_shared<x3270::DataStream5250Parser>(*_screen);
+        _kbd5250 = std::make_shared<x3270::KeyboardState5250>(*_screen, *_codec);
+        
+        // Capture specific shared_ptrs, not weakSelf, for background safety
+        auto parser = _parser5250;
+        auto kbd = _kbd5250;
+        auto session = _session;
+        
+        parser->setUnlockCallback([kbd]() {
+            dispatch_async(dispatch_get_main_queue(), ^{ kbd->unlock(); });
+        });
+        parser->setAlarmCallback([]() {
+            dispatch_async(dispatch_get_main_queue(), ^{ NSBeep(); });
+        });
+        parser->setSendCallback([session](const std::vector<uint8_t> &payload) {
+            session->sendRecord(payload);
+        });
+        parser->setQueryReplyCallback([session5250](const std::vector<uint8_t> &payload) {
+            session5250->sendGdsRecord(payload, x3270::GDS_OP_NO_OP);
+        });
+        kbd->setSendCallback([session](const std::vector<uint8_t> &record) -> bool {
+            return session->sendRecord(record);
+        });
+        
+        _session->setDataCallback([weakSelf, parser, kbd](const std::vector<uint8_t> &record) {
+            std::vector<uint8_t> recCopy = record;
+            dispatch_async(dispatch_get_main_queue(), ^{
+                __strong auto s = weakSelf; if (!s || s->_isClosing) return;
+                if (recCopy.size() >= 10 && (recCopy[9] == 0x01 || recCopy[9] == 0x03)) kbd->unlock();
+                parser->processRecord(recCopy);
+                [s->_termView screenDidUpdate];
+            });
         });
     } else {
-        _graphics = std::make_unique<x3270::GraphicsBuffer>();
-        auto *session3270 = new x3270::TN3270Session();
+        _graphics = std::make_shared<x3270::GraphicsBuffer>();
+        auto session3270 = std::make_shared<x3270::TN3270Session>();
         session3270->setModel(_model);
-        _session.reset(session3270);
-        _parser3270 = std::make_unique<x3270::DataStreamParser>(*_screen, *_codec);
+        _session = session3270;
+        
+        _parser3270 = std::make_shared<x3270::DataStreamParser>(*_screen, *_codec);
         _parser3270->setGraphicsBuffer(*_graphics);
-        _kbd3270 = std::make_unique<x3270::KeyboardState>(*_screen, *_codec);
-        _parser3270->setGraphicsUpdateCallback([weakSelf]() { dispatch_async(dispatch_get_main_queue(), ^{ __strong auto s = weakSelf; if (s) [s->_termView graphicsDidUpdate]; }); });
-        _parser3270->setUnlockCallback([weakSelf]() { dispatch_async(dispatch_get_main_queue(), ^{ __strong auto s = weakSelf; if (s) s->_kbd3270->unlock(); }); });
-        _parser3270->setAlarmCallback([]() { dispatch_async(dispatch_get_main_queue(), ^{ NSBeep(); }); });
-        _parser3270->setSendCallback([weakSelf](const std::vector<uint8_t> &data) { __strong auto s = weakSelf; if (s) s->_session->sendRecord(data); });
-        _kbd3270->setSendCallback([weakSelf](const std::vector<uint8_t> &record) -> bool { __strong auto s = weakSelf; return s ? s->_session->sendRecord(record) : false; });
-        _session->setDataCallback([weakSelf](const std::vector<uint8_t> &record) {
-            __strong auto s = weakSelf; if (!s) return;
-            auto *session = static_cast<x3270::TN3270Session *>(s->_session.get());
-            const std::vector<uint8_t> *payload = &record;
-            std::vector<uint8_t> stripped;
-            if (session->tn3270eActive() && record.size() >= 5) { if (record[0] != 0x00) return; stripped.assign(record.begin() + 5, record.end()); payload = &stripped; }
-            s->_parser3270->processRecord(*payload);
-            dispatch_async(dispatch_get_main_queue(), ^{ __strong auto s2 = weakSelf; if (s2) [s2->_termView screenDidUpdate]; });
+        _kbd3270 = std::make_shared<x3270::KeyboardState>(*_screen, *_codec);
+        
+        auto parser = _parser3270;
+        auto kbd = _kbd3270;
+        auto session = _session;
+        
+        parser->setGraphicsUpdateCallback([weakSelf]() {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                __strong auto s = weakSelf; if (s && !s->_isClosing) [s->_termView graphicsDidUpdate];
+            });
+        });
+        parser->setUnlockCallback([kbd]() {
+            dispatch_async(dispatch_get_main_queue(), ^{ kbd->unlock(); });
+        });
+        parser->setAlarmCallback([]() {
+            dispatch_async(dispatch_get_main_queue(), ^{ NSBeep(); });
+        });
+        parser->setSendCallback([session](const std::vector<uint8_t> &data) {
+            session->sendRecord(data);
+        });
+        kbd->setSendCallback([session](const std::vector<uint8_t> &record) -> bool {
+            return session->sendRecord(record);
+        });
+        
+        _session->setDataCallback([weakSelf, parser, session](const std::vector<uint8_t> &record) {
+            std::vector<uint8_t> recCopy = record;
+            dispatch_async(dispatch_get_main_queue(), ^{
+                __strong auto s = weakSelf; if (!s || s->_isClosing) return;
+                auto *sess = static_cast<x3270::TN3270Session *>(session.get());
+                const std::vector<uint8_t> *payload = &recCopy;
+                std::vector<uint8_t> stripped;
+                if (sess->tn3270eActive() && recCopy.size() >= 5) {
+                    if (recCopy[0] != 0x00) return;
+                    stripped.assign(recCopy.begin() + 5, recCopy.end());
+                    payload = &stripped;
+                }
+                parser->processRecord(*payload);
+                [s->_termView screenDidUpdate];
+            });
         });
     }
-    _session->setConnectedCallback([weakSelf]() { dispatch_async(dispatch_get_main_queue(), ^{ __strong auto s = weakSelf; if (!s) return; if (s->_kbd3270) s->_kbd3270->unlock(); if (s->_kbd5250) s->_kbd5250->lock(x3270::KeyboardState5250::LockReason::System); [s->_termView screenDidUpdate]; if (s.onConnected) s.onConnected(); }); });
-    _session->setErrorCallback([weakSelf](const std::string &message) { NSString *error = [NSString stringWithUTF8String:message.c_str()]; dispatch_async(dispatch_get_main_queue(), ^{ __strong auto s = weakSelf; if (!s || s->_userClosed) return; if (s.onConnectError) s.onConnectError(error); [s disconnectSession]; }); });
-    _session->setTrafficCallback([weakSelf](bool outgoing, const std::vector<uint8_t> &data) { __strong auto s = weakSelf; if (s) [s->_debugWC appendBytes:data.data() length:data.size() isOutgoing:outgoing ? YES : NO]; });
+    
+    auto kbd3270 = _kbd3270;
+    auto kbd5250 = _kbd5250;
+    
+    _session->setConnectedCallback([weakSelf, kbd3270, kbd5250]() {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            __strong auto s = weakSelf; if (!s || s->_isClosing) return;
+            if (kbd3270) kbd3270->unlock();
+            if (kbd5250) kbd5250->lock(x3270::KeyboardState5250::LockReason::System);
+            [s->_termView screenDidUpdate];
+            if (s.onConnected) s.onConnected();
+        });
+    });
+    
+    _session->setErrorCallback([weakSelf](const std::string &message) {
+        NSString *error = [NSString stringWithUTF8String:message.c_str()];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            __strong auto s = weakSelf; if (!s || s->_isClosing) return;
+            if (s.onConnectError) s.onConnectError(error);
+            [s disconnectSession];
+        });
+    });
+    
+    _session->setTrafficCallback([weakSelf](bool outgoing, const std::vector<uint8_t> &data) {
+        std::vector<uint8_t> dataCopy = data;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            __strong auto s = weakSelf;
+            if (s && !s->_isClosing) [s->_debugWC appendBytes:dataCopy.data() length:dataCopy.size() isOutgoing:outgoing ? YES : NO];
+        });
+    });
 }
 
 - (void)startNetworkConnection {
+    if (_isConnecting || _isClosing) return;
+    _isConnecting = YES;
+    
     std::string host = [_host UTF8String];
     uint16_t port = _port;
     bool useSSL = _useSSL == YES;
     bool verifyCert = _verifyCert == YES;
     std::string caBundle = _caBundle ? [_caBundle UTF8String] : "";
-    _networkThread = std::thread([self, host, port, useSSL, verifyCert, caBundle]() { @autoreleasepool { if (_session->connect(host, port, useSSL, verifyCert, caBundle)) _session->readLoop(); } });
-    _networkThread.detach();
+    
+    // Capture the session shared_ptr to ensure it outlives the thread's scope
+    std::shared_ptr<x3270::ITerminalSession> session = _session;
+    __weak TerminalViewController *weakSelf = self;
+    
+    if (_networkThread.joinable()) {
+        _networkThread.join();
+    }
+    
+    _networkThread = std::thread([weakSelf, session, host, port, useSSL, verifyCert, caBundle]() {
+        @autoreleasepool {
+            if (session && session->connect(host, port, useSSL, verifyCert, caBundle)) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    TerminalViewController *s = weakSelf;
+                    if (s) s->_isConnecting = NO;
+                });
+                session->readLoop();
+            } else {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    TerminalViewController *s = weakSelf;
+                    if (s) s->_isConnecting = NO;
+                });
+            }
+        }
+    });
 }
 
 - (void)toggleTransferSidebar:(id)sender {
@@ -359,7 +462,7 @@ static NSString * const kDX3270BroadcastOOBNotification  = @"DX3270BroadcastOOBN
 - (IBAction)toggleVideoRecording:(id)sender {
     if ([_termView isVideoRecording]) {
         [_termView stopVideoRecording];
-        self.title = [self.title stringByReplacingOccurrencesOfString:@" [RECORDING]" withString:@""];
+        self.title = [self.title stringByReplacingOccurrencesOfString:@" [RECORDING ●]" withString:@""];
         return;
     }
     NSSavePanel *panel = [NSSavePanel savePanel];
@@ -375,7 +478,7 @@ static NSString * const kDX3270BroadcastOOBNotification  = @"DX3270BroadcastOOBN
     [panel beginSheetModalForWindow:self.view.window completionHandler:^(NSModalResponse result) {
         if (result == NSModalResponseOK && panel.URL) {
             [self->_termView startVideoRecordingToURL:panel.URL];
-            self.title = [self.title stringByAppendingString:@" [RECORDING]"];
+            self.title = [self.title stringByAppendingString:@" [RECORDING ●]"];
         }
     }];
 }
