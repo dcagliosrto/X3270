@@ -35,13 +35,14 @@ NS_ASSUME_NONNULL_BEGIN
 
 /// Safely disconnects the session and stops network threads.
 - (void)disconnectSession;
+/// Safely reconnects the session, re-establishing network threads if needed.
+- (void)reconnectSession;
 
 // Native Actions
 - (IBAction)saveScreenshot:(id)sender;
 - (IBAction)exportText:(id)sender;
 - (IBAction)toggleVideoRecording:(id)sender;
 - (IBAction)toggleTimeMachine:(id)sender;
-- (void)toggleTransferSidebar:(id)sender;
 
 @end
 

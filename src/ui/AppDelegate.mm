@@ -126,6 +126,9 @@
     
     NSMenuItem *closeTabItem = [fileMenu addItemWithTitle:@"Close Tab / Window" action:@selector(closeTab:) keyEquivalent:@"w"];
     closeTabItem.keyEquivalentModifierMask = NSEventModifierFlagCommand;
+
+    NSMenuItem *reconnectItem = [fileMenu addItemWithTitle:@"Reconnect Session" action:@selector(reconnect:) keyEquivalent:@"r"];
+    reconnectItem.keyEquivalentModifierMask = NSEventModifierFlagCommand;
     
     [fileMenu addItem:[NSMenuItem separatorItem]];
     NSMenuItem *transferItem = [fileMenu addItemWithTitle:@"z/OS File Transfer Dock" action:@selector(openTransferDock:) keyEquivalent:@"U"];
@@ -241,6 +244,13 @@
     } else {
         // Fallback per chiudere una finestra non-workspace (es. Preferences)
         [NSApp.keyWindow close];
+    }
+}
+
+- (void)reconnect:(id)sender {
+    NSWindowController *activeWC = NSApp.keyWindow.windowController;
+    if ([activeWC respondsToSelector:@selector(reconnectActiveSession:)]) {
+        [activeWC performSelector:@selector(reconnectActiveSession:) withObject:sender];
     }
 }
 

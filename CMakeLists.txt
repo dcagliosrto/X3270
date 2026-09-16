@@ -73,14 +73,19 @@ set(UTILITY_SOURCES
     src/utils/WorkspaceManager.mm
 )
 
+set(UI_PANE_SOURCES
+    src/ui/TerminalPaneViewController.mm
+)
+
+
 set(UI_SOURCES
     ${UI_APP_SOURCES}
     ${UI_TERMINAL_SOURCES}
     ${UI_WORKSPACE_SOURCES}
     ${UI_SETTINGS_SOURCES}
+    ${UI_PANE_SOURCES}
     ${UTILITY_SOURCES}
     src/core/MacroSerializer.mm
-    
 )
 
 # Keep the source tree hierarchical in IDE project views.

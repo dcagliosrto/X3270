@@ -24,8 +24,6 @@ static NSString * const kDX3270BroadcastISPFNotification = @"DX3270BroadcastISPF
 static NSString * const kDX3270BroadcastOOBNotification  = @"DX3270BroadcastOOBNotification";
 
 @interface TerminalViewController ()
-@property (nonatomic, strong) NSSplitViewController *splitViewController;
-@property (nonatomic, strong) NSSplitViewItem *sidebarSplitItem;
 - (NSString *)getPasswordForUser:(NSString *)user host:(NSString *)host;
 - (void)savePasswordToKeychain:(NSString *)password forUser:(NSString *)user host:(NSString *)host;
 - (NSString *)promptForPasswordForUser:(NSString *)user host:(NSString *)host;
@@ -34,9 +32,8 @@ static NSString * const kDX3270BroadcastOOBNotification  = @"DX3270BroadcastOOBN
 @implementation TerminalViewController {
     TerminalView* _termView;
     DebugWindowController *_debugWC;
-    TransferDockViewController *_transferDockVC;
     
-    // Engine C++
+    // C++ Engine
     std::shared_ptr<x3270::ScreenBuffer>          _screen;
     std::shared_ptr<x3270::GraphicsBuffer>        _graphics;
     std::shared_ptr<x3270::EbcdicCodec>           _codec;
@@ -51,6 +48,9 @@ static NSString * const kDX3270BroadcastOOBNotification  = @"DX3270BroadcastOOBN
     
     std::atomic<bool> _isClosing;
     BOOL _isConnecting;
+    
+    // Generation counter to protect us from "Ghost Callbacks"
+    int _connectionId;
     
     // Config
     BOOL       _useSSL;
@@ -80,6 +80,7 @@ static NSString * const kDX3270BroadcastOOBNotification  = @"DX3270BroadcastOOBN
         _model = model;
         _protocol = protocol;
         _isClosing = false;
+        _connectionId = 0;
         
         [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(userDefaultsDidChange:) name:NSUserDefaultsDidChangeNotification object:nil];
         [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(handleBroadcastISPFCommand:) name:kDX3270BroadcastISPFNotification object:nil];
@@ -94,34 +95,63 @@ static NSString * const kDX3270BroadcastOOBNotification  = @"DX3270BroadcastOOBN
 }
 
 - (void)disconnectSession {
-    if (_isClosing.exchange(true)) return; // Prevent multiple calls
+    if (_isClosing.exchange(true)) return;
     
-    // 1. Immediately disconnect the session. This interrupts blocking socket calls.
     if (_session) {
         _session->disconnect();
     }
     
-    // 2. Clear view callbacks immediately to prevent background threads from touching the UI
-    if (_session) {
-        _session->setDataCallback(nullptr);
-        _session->setConnectedCallback(nullptr);
-        _session->setErrorCallback(nullptr);
-        _session->setTrafficCallback(nullptr);
-    }
-    
-    // 3. Nullify pointers to C++ objects in the view
     if (_termView) {
         [_termView setScreenBuffer:nullptr keyboardState:nullptr];
         [_termView setScreenBuffer:nullptr keyboardState5250:nullptr];
         [_termView setGraphicsBuffer:nullptr];
     }
     
-    // 4. Safely wait for the background thread to finish its work
     if (_networkThread.joinable()) {
         _networkThread.join();
     }
     
     if (self.onClosed) self.onClosed();
+}
+
+- (void)reconnectSession {
+    // If the tab/window is closing permanently, ignore the command
+    if (_isClosing) return;
+    
+    // 1. Unhook and stop the current network session
+    if (_session) {
+        _session->disconnect();
+    }
+    
+    // 2. Unhook the view from the old C++ buffers before destroying them
+    if (_termView) {
+        [_termView setScreenBuffer:nullptr keyboardState:nullptr];
+        [_termView setScreenBuffer:nullptr keyboardState5250:nullptr];
+        [_termView setGraphicsBuffer:nullptr];
+    }
+    
+    // 3. DETACH the old thread instead of using "join".
+    // Ghost callbacks will be discarded thanks to the _connectionId increment.
+    if (_networkThread.joinable()) {
+        _networkThread.detach();
+    }
+    
+    _isConnecting = NO;
+    
+    // 4. Rebuild a clean new C++ engine
+    [self buildEngineObjects];
+    
+    // 5. Reconnect the new buffers to the view
+    if (_kbd3270) {
+        [_termView setScreenBuffer:_screen.get() keyboardState:_kbd3270.get()];
+        [_termView setGraphicsBuffer:_graphics.get()];
+    } else {
+        [_termView setScreenBuffer:_screen.get() keyboardState5250:_kbd5250.get()];
+    }
+    
+    // 6. Force a visual update and restart!
+    [_termView setNeedsDisplay:YES];
+    [self startNetworkConnection];
 }
 
 - (void)loadView {
@@ -156,29 +186,9 @@ static NSString * const kDX3270BroadcastOOBNotification  = @"DX3270BroadcastOOBN
     [dockView setContentHuggingPriority:NSLayoutPriorityRequired forOrientation:NSLayoutConstraintOrientationVertical];
     [terminalStack addArrangedSubview:dockView];
     
-    NSViewController *terminalHostVC = [[NSViewController alloc] init];
-    terminalHostVC.view = terminalStack;
-    
-    _transferDockVC = [[TransferDockViewController alloc] init];
-    _transferDockVC.currentHost = _host;
-    
-    self.splitViewController = [[NSSplitViewController alloc] init];
-    NSSplitViewItem *mainItem = [NSSplitViewItem splitViewItemWithViewController:terminalHostVC];
-    mainItem.holdingPriority = 200;
-    
-    self.sidebarSplitItem = [NSSplitViewItem splitViewItemWithViewController:_transferDockVC];
-    self.sidebarSplitItem.holdingPriority = 260;
-    self.sidebarSplitItem.canCollapse = YES;
-    self.sidebarSplitItem.collapsed = YES;
-    self.sidebarSplitItem.minimumThickness = 280;
-    
-    [self.splitViewController addSplitViewItem:mainItem];
-    [self.splitViewController addSplitViewItem:self.sidebarSplitItem];
-    
-    [self addChildViewController:self.splitViewController];
-    self.splitViewController.view.frame = self.view.bounds;
-    self.splitViewController.view.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-    [self.view addSubview:self.splitViewController.view];
+    terminalStack.frame = self.view.bounds;
+    terminalStack.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    [self.view addSubview:terminalStack];
 }
 
 - (void)viewDidAppear {
@@ -191,16 +201,22 @@ static NSString * const kDX3270BroadcastOOBNotification  = @"DX3270BroadcastOOBN
 - (void)userDefaultsDidChange:(NSNotification *)note {
     BOOL brackets = [[NSUserDefaults standardUserDefaults] boolForKey:kPrefHerculesBrackets];
     if (_codec) _codec->setHerculesBrackets(brackets);
-    [_debugWC configureCodePage:(int)_codePage herculesBrackets:brackets];
+    if (_debugWC) [_debugWC configureCodePage:(int)_codePage herculesBrackets:brackets];
 }
 
 - (void)buildEngineObjects {
-    // Note: We use std::shared_ptr here so that copies passed into blocks keep the objects alive
+    // Increment the generation ID to invalidate old asynchronous callbacks
+    _connectionId++;
+    int currentId = _connectionId;
+    
     _screen = std::make_shared<x3270::ScreenBuffer>(_model);
     _codec = std::make_shared<x3270::EbcdicCodec>(_codePage);
     BOOL brackets = [[NSUserDefaults standardUserDefaults] boolForKey:kPrefHerculesBrackets];
     _codec->setHerculesBrackets(brackets);
-    _debugWC = [[DebugWindowController alloc] init];
+    
+    if (!_debugWC) {
+        _debugWC = [[DebugWindowController alloc] init];
+    }
     [_debugWC configureCodePage:(int)_codePage herculesBrackets:brackets];
     
     __weak TerminalViewController *weakSelf = self;
@@ -213,7 +229,6 @@ static NSString * const kDX3270BroadcastOOBNotification  = @"DX3270BroadcastOOBN
         _parser5250 = std::make_shared<x3270::DataStream5250Parser>(*_screen);
         _kbd5250 = std::make_shared<x3270::KeyboardState5250>(*_screen, *_codec);
         
-        // Capture specific shared_ptrs, not weakSelf, for background safety
         auto parser = _parser5250;
         auto kbd = _kbd5250;
         auto session = _session;
@@ -234,10 +249,11 @@ static NSString * const kDX3270BroadcastOOBNotification  = @"DX3270BroadcastOOBN
             return session->sendRecord(record);
         });
         
-        _session->setDataCallback([weakSelf, parser, kbd](const std::vector<uint8_t> &record) {
+        _session->setDataCallback([weakSelf, currentId, parser, kbd](const std::vector<uint8_t> &record) {
             std::vector<uint8_t> recCopy = record;
             dispatch_async(dispatch_get_main_queue(), ^{
-                __strong auto s = weakSelf; if (!s || s->_isClosing) return;
+                __strong auto s = weakSelf; 
+                if (!s || s->_isClosing || s->_connectionId != currentId) return; // Ghost filter
                 if (recCopy.size() >= 10 && (recCopy[9] == 0x01 || recCopy[9] == 0x03)) kbd->unlock();
                 parser->processRecord(recCopy);
                 [s->_termView screenDidUpdate];
@@ -257,9 +273,11 @@ static NSString * const kDX3270BroadcastOOBNotification  = @"DX3270BroadcastOOBN
         auto kbd = _kbd3270;
         auto session = _session;
         
-        parser->setGraphicsUpdateCallback([weakSelf]() {
+        parser->setGraphicsUpdateCallback([weakSelf, currentId]() {
             dispatch_async(dispatch_get_main_queue(), ^{
-                __strong auto s = weakSelf; if (s && !s->_isClosing) [s->_termView graphicsDidUpdate];
+                __strong auto s = weakSelf; 
+                if (!s || s->_isClosing || s->_connectionId != currentId) return;
+                [s->_termView graphicsDidUpdate];
             });
         });
         parser->setUnlockCallback([kbd]() {
@@ -275,10 +293,11 @@ static NSString * const kDX3270BroadcastOOBNotification  = @"DX3270BroadcastOOBN
             return session->sendRecord(record);
         });
         
-        _session->setDataCallback([weakSelf, parser, session](const std::vector<uint8_t> &record) {
+        _session->setDataCallback([weakSelf, currentId, parser, session](const std::vector<uint8_t> &record) {
             std::vector<uint8_t> recCopy = record;
             dispatch_async(dispatch_get_main_queue(), ^{
-                __strong auto s = weakSelf; if (!s || s->_isClosing) return;
+                __strong auto s = weakSelf; 
+                if (!s || s->_isClosing || s->_connectionId != currentId) return; // Ghost filter
                 auto *sess = static_cast<x3270::TN3270Session *>(session.get());
                 const std::vector<uint8_t> *payload = &recCopy;
                 std::vector<uint8_t> stripped;
@@ -296,9 +315,10 @@ static NSString * const kDX3270BroadcastOOBNotification  = @"DX3270BroadcastOOBN
     auto kbd3270 = _kbd3270;
     auto kbd5250 = _kbd5250;
     
-    _session->setConnectedCallback([weakSelf, kbd3270, kbd5250]() {
+    _session->setConnectedCallback([weakSelf, currentId, kbd3270, kbd5250]() {
         dispatch_async(dispatch_get_main_queue(), ^{
-            __strong auto s = weakSelf; if (!s || s->_isClosing) return;
+            __strong auto s = weakSelf; 
+            if (!s || s->_isClosing || s->_connectionId != currentId) return;
             if (kbd3270) kbd3270->unlock();
             if (kbd5250) kbd5250->lock(x3270::KeyboardState5250::LockReason::System);
             [s->_termView screenDidUpdate];
@@ -306,20 +326,22 @@ static NSString * const kDX3270BroadcastOOBNotification  = @"DX3270BroadcastOOBN
         });
     });
     
-    _session->setErrorCallback([weakSelf](const std::string &message) {
+    _session->setErrorCallback([weakSelf, currentId](const std::string &message) {
         NSString *error = [NSString stringWithUTF8String:message.c_str()];
         dispatch_async(dispatch_get_main_queue(), ^{
-            __strong auto s = weakSelf; if (!s || s->_isClosing) return;
+            __strong auto s = weakSelf; 
+            if (!s || s->_isClosing || s->_connectionId != currentId) return; // Vital ghost filter
             if (s.onConnectError) s.onConnectError(error);
             [s disconnectSession];
         });
     });
     
-    _session->setTrafficCallback([weakSelf](bool outgoing, const std::vector<uint8_t> &data) {
+    _session->setTrafficCallback([weakSelf, currentId](bool outgoing, const std::vector<uint8_t> &data) {
         std::vector<uint8_t> dataCopy = data;
         dispatch_async(dispatch_get_main_queue(), ^{
             __strong auto s = weakSelf;
-            if (s && !s->_isClosing) [s->_debugWC appendBytes:dataCopy.data() length:dataCopy.size() isOutgoing:outgoing ? YES : NO];
+            if (!s || s->_isClosing || s->_connectionId != currentId) return;
+            [s->_debugWC appendBytes:dataCopy.data() length:dataCopy.size() isOutgoing:outgoing ? YES : NO];
         });
     });
 }
@@ -334,7 +356,6 @@ static NSString * const kDX3270BroadcastOOBNotification  = @"DX3270BroadcastOOBN
     bool verifyCert = _verifyCert == YES;
     std::string caBundle = _caBundle ? [_caBundle UTF8String] : "";
     
-    // Capture the session shared_ptr to ensure it outlives the thread's scope
     std::shared_ptr<x3270::ITerminalSession> session = _session;
     __weak TerminalViewController *weakSelf = self;
     
@@ -344,25 +365,21 @@ static NSString * const kDX3270BroadcastOOBNotification  = @"DX3270BroadcastOOBN
     
     _networkThread = std::thread([weakSelf, session, host, port, useSSL, verifyCert, caBundle]() {
         @autoreleasepool {
-            if (session && session->connect(host, port, useSSL, verifyCert, caBundle)) {
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    TerminalViewController *s = weakSelf;
-                    if (s) s->_isConnecting = NO;
-                });
+            bool success = false;
+            if (session) {
+                success = session->connect(host, port, useSSL, verifyCert, caBundle);
+            }
+            
+            dispatch_async(dispatch_get_main_queue(), ^{
+                TerminalViewController *s = weakSelf;
+                if (s) s->_isConnecting = NO;
+            });
+            
+            if (success) {
                 session->readLoop();
-            } else {
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    TerminalViewController *s = weakSelf;
-                    if (s) s->_isConnecting = NO;
-                });
             }
         }
     });
-}
-
-- (void)toggleTransferSidebar:(id)sender {
-    if (!self.sidebarSplitItem) return;
-    [NSAnimationContext runAnimationGroup:^(NSAnimationContext *context) { context.duration = 0.25; self.sidebarSplitItem.animator.collapsed = !self.sidebarSplitItem.isCollapsed; } completionHandler:^{ [self->_termView setNeedsDisplay:YES]; }];
 }
 
 - (NSString *)getPasswordForUser:(NSString *)user host:(NSString *)host {

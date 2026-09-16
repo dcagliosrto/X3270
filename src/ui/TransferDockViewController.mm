@@ -60,11 +60,23 @@
 
 @implementation TransferDockViewController
 
-- (void)loadView {
-    NSView *containerView = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 280, 640)]; 
-    containerView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-    self.view = containerView;
+- (void)setCurrentHost:(NSString *)currentHost {
+    _currentHost = [currentHost copy];
+    // Re-Calculate the open ports (SSH/FTP) when the active terminal changes
+    if (self.isViewLoaded) {
+        [self runProtocolProbes];
+    }
+}
 
+- (void)loadView {
+    NSVisualEffectView *containerView = [[NSVisualEffectView alloc] initWithFrame:NSMakeRect(0, 0, 280, 640)];
+    containerView.material = NSVisualEffectMaterialSidebar;
+    containerView.appearance = [NSAppearance appearanceNamed:NSAppearanceNameVibrantDark];
+    containerView.blendingMode = NSVisualEffectBlendingModeBehindWindow;
+    containerView.state = NSVisualEffectStateActive;
+    containerView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    
+    self.view = containerView;
     NSStackView *stack = [[NSStackView alloc] initWithFrame:containerView.bounds];
     stack.orientation = NSUserInterfaceLayoutOrientationVertical;
     stack.alignment = NSLayoutAttributeLeading;

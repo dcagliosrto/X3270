@@ -1,14 +1,22 @@
 #import "WorkspaceViewController.h"
 
-@implementation WorkspaceViewController {
-    NSScrollView *_tabBarScrollView;
-    NSStackView *_tabBarStackView;
-    NSTextField *_emptyStateLabel;
-}
+@interface WorkspaceViewController ()
+@property (nonatomic, strong) NSViewController *paneContainerVC;
+@property (nonatomic, strong) NSMutableArray<TerminalPaneViewController *> *allPanes;
+@property (nonatomic, weak) TerminalPaneViewController *activePane;
+@property (nonatomic, strong) NSTextField *emptyStateLabel;
+
+// The Transfer Dock and its column manager
+@property (nonatomic, strong) TransferDockViewController *transferDockVC;
+@property (nonatomic, strong) NSSplitViewItem *transferSidebarItem;
+@end
+
+@implementation WorkspaceViewController
 
 - (instancetype)initWithWorkspace:(DXWorkspace *)workspace {
     if (self = [super initWithNibName:nil bundle:nil]) {
         _workspace = workspace;
+        _allPanes = [NSMutableArray array];
     }
     return self;
 }
@@ -17,173 +25,136 @@
     self.view = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 1024, 768)];
     self.view.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     
-    NSView *rightContainer = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 800, 768)];
-    rightContainer.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    // --- PANES CONTAINER (Center) ---
+    self.paneContainerVC = [[NSViewController alloc] init];
+    self.paneContainerVC.view = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 800, 768)];
+    self.paneContainerVC.view.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    self.paneContainerVC.view.wantsLayer = YES;
+    self.paneContainerVC.view.layer.backgroundColor = [NSColor colorWithWhite:0.1 alpha:1.0].CGColor;
     
-    // --- TAB BAR CUSTOM ---
-    _tabBarScrollView = [[NSScrollView alloc] initWithFrame:NSMakeRect(0, 732, 800, 36)];
-    _tabBarScrollView.autoresizingMask = NSViewWidthSizable | NSViewMinYMargin;
-    _tabBarScrollView.hasHorizontalScroller = NO;
-    _tabBarScrollView.hasVerticalScroller = NO;
-    _tabBarScrollView.drawsBackground = NO;
-    _tabBarScrollView.borderType = NSNoBorder;
-    
-    _tabBarStackView = [[NSStackView alloc] initWithFrame:_tabBarScrollView.bounds];
-    _tabBarStackView.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-    _tabBarStackView.spacing = 6;
-    _tabBarStackView.edgeInsets = NSEdgeInsetsMake(4, 10, 4, 10);
-    _tabBarStackView.alignment = NSLayoutAttributeCenterY;
-    
-    _tabBarScrollView.documentView = _tabBarStackView;
-    [rightContainer addSubview:_tabBarScrollView];
-    
-    // --- CONTENUTO TERMINALE ---
-    _tabView = [[NSTabView alloc] initWithFrame:NSMakeRect(0, 0, 800, 730)];
-    _tabView.tabViewType = NSNoTabsNoBorder;
-    _tabView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-    [rightContainer addSubview:_tabView];
-    
-    // --- ETICHETTA DI STATO VUOTO ---
+    // --- EMPTY STATE LABEL ---
     _emptyStateLabel = [NSTextField labelWithString:@"No active sessions\nDouble-click a system in the sidebar to connect"];
     _emptyStateLabel.font = [NSFont systemFontOfSize:13 weight:NSFontWeightMedium];
     _emptyStateLabel.textColor = [NSColor tertiaryLabelColor];
     _emptyStateLabel.alignment = NSTextAlignmentCenter;
     _emptyStateLabel.frame = NSMakeRect(200, 350, 400, 40);
     _emptyStateLabel.autoresizingMask = NSViewMinXMargin | NSViewMaxXMargin | NSViewMinYMargin | NSViewMaxYMargin;
-    [rightContainer addSubview:_emptyStateLabel];
+    [self.paneContainerVC.view addSubview:_emptyStateLabel];
     
-    // Sidebar
+    // --- SIDEBAR (Left) ---
     WorkspaceSidebarViewController *sidebarVC = [[WorkspaceSidebarViewController alloc] initWithWorkspace:_workspace];
     sidebarVC.delegate = self;
     
-    NSViewController *rightVC = [[NSViewController alloc] init];
-    rightVC.view = rightContainer;
+    // --- GLOBAL TRANSFER DOCK (Right) ---
+    self.transferDockVC = [[TransferDockViewController alloc] init];
     
+    // --- MAIN SPLIT ---
     _mainSplitController = [[NSSplitViewController alloc] init];
     
     NSSplitViewItem *sidebarItem = [NSSplitViewItem sidebarWithViewController:sidebarVC];
     sidebarItem.canCollapse = YES;
     
-    NSSplitViewItem *tabsItem = [NSSplitViewItem splitViewItemWithViewController:rightVC];
+    NSSplitViewItem *contentItem = [NSSplitViewItem splitViewItemWithViewController:self.paneContainerVC];
+    
+    self.transferSidebarItem = [NSSplitViewItem splitViewItemWithViewController:self.transferDockVC];
+    self.transferSidebarItem.holdingPriority = 260;
+    self.transferSidebarItem.canCollapse = YES;
+    self.transferSidebarItem.collapsed = YES; // Hidden by default
+    self.transferSidebarItem.minimumThickness = 280;
+    self.transferSidebarItem.maximumThickness = 350;
     
     [_mainSplitController addSplitViewItem:sidebarItem];
-    [_mainSplitController addSplitViewItem:tabsItem];
+    [_mainSplitController addSplitViewItem:contentItem];
+    [_mainSplitController addSplitViewItem:self.transferSidebarItem];
     
     [self addChildViewController:_mainSplitController];
     _mainSplitController.view.frame = self.view.bounds;
     _mainSplitController.view.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     [self.view addSubview:_mainSplitController.view];
-    
-    [self updateCustomTabBar];
 }
 
-#pragma mark - Custom Tab Bar Rendering
+#pragma mark - Pane Tree Management
 
-- (void)updateCustomTabBar {
-    for (NSView *subview in [_tabBarStackView.arrangedSubviews copy]) {
-        [_tabBarStackView removeArrangedSubview:subview];
-        [subview removeFromSuperview];
-    }
-    
-    NSUInteger tabCount = _tabView.tabViewItems.count;
-    _emptyStateLabel.hidden = (tabCount > 0);
-    _tabBarScrollView.hidden = (tabCount == 0);
-    _tabView.hidden = (tabCount == 0);
-    
-    if (tabCount == 0) return;
-    
-    NSInteger selectedIndex = [_tabView indexOfTabViewItem:_tabView.selectedTabViewItem];
-    
-    for (NSUInteger i = 0; i < tabCount; i++) {
-        NSTabViewItem *item = _tabView.tabViewItems[i];
-        BOOL isActive = ((NSInteger)i == selectedIndex);
-        
-        NSView *tabView = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 145, 28)];
-        tabView.wantsLayer = YES;
-        tabView.layer.cornerRadius = 6.0;
-        tabView.layer.backgroundColor = isActive ? [NSColor controlAccentColor].CGColor : [NSColor colorWithWhite:0.2 alpha:0.4].CGColor;
-        
-        NSImageView *iconView = [NSImageView imageViewWithImage:[NSImage imageWithSystemSymbolName:@"terminal" accessibilityDescription:nil]];
-        iconView.frame = NSMakeRect(8, 6, 16, 16);
-        iconView.contentTintColor = isActive ? [NSColor whiteColor] : [NSColor secondaryLabelColor];
-        [tabView addSubview:iconView];
-        
-        NSButton *titleBtn = [NSButton buttonWithTitle:item.label target:self action:@selector(tabTitleClicked:)];
-        titleBtn.tag = i;
-        titleBtn.bordered = NO;
-        titleBtn.font = [NSFont systemFontOfSize:11 weight:isActive ? NSFontWeightBold : NSFontWeightRegular];
-        titleBtn.contentTintColor = isActive ? [NSColor whiteColor] : [NSColor labelColor];
-        titleBtn.frame = NSMakeRect(26, 2, 90, 24);
-        titleBtn.alignment = NSTextAlignmentLeft;
-        [tabView addSubview:titleBtn];
-        
-        NSButton *closeBtn = [NSButton buttonWithImage:[NSImage imageWithSystemSymbolName:@"xmark.circle.fill" accessibilityDescription:@"Close"] target:self action:@selector(tabCloseClicked:)];
-        closeBtn.tag = i;
-        closeBtn.bordered = NO;
-        closeBtn.bezelStyle = NSBezelStyleInline;
-        closeBtn.contentTintColor = isActive ? [NSColor whiteColor] : [NSColor colorWithWhite:0.6 alpha:1.0];
-        closeBtn.frame = NSMakeRect(120, 6, 16, 16);
-        [tabView addSubview:closeBtn];
-        
-        [_tabBarStackView addArrangedSubview:tabView];
-        [tabView.widthAnchor constraintEqualToConstant:145].active = YES;
-        [tabView.heightAnchor constraintEqualToConstant:28].active = YES;
-    }
+- (TerminalViewController *)activeTerminal {
+    return self.activePane.terminalVC;
 }
 
-- (void)tabTitleClicked:(NSButton *)sender {
-    NSInteger idx = sender.tag;
-    if (idx >= 0 && idx < (NSInteger)_tabView.tabViewItems.count) {
-        [_tabView selectTabViewItemAtIndex:idx];
-        [self updateCustomTabBar];
+- (void)setActivePane:(TerminalPaneViewController *)pane {
+    // Remove focus from all other panes
+    for (TerminalPaneViewController *p in self.allPanes) {
+        p.isActive = NO;
     }
-}
-
-- (void)closeTabAtIndex:(NSInteger)idx {
-    if (idx >= 0 && idx < (NSInteger)_tabView.tabViewItems.count) {
-        NSTabViewItem *item = _tabView.tabViewItems[idx];
-        if ([item.identifier isKindOfClass:[TerminalViewController class]]) {
-            TerminalViewController *termVC = (TerminalViewController *)item.identifier;
-            [termVC disconnectSession];
-            [termVC removeFromParentViewController];
+    _activePane = pane;
+    if (_activePane) {
+        _activePane.isActive = YES;
+        // Pass the host to the global Transfer Dock
+        self.transferDockVC.currentHost = _activePane.terminalVC.host;
+        
+        if (self.view.window && _activePane.terminalVC.title) {
+            self.view.window.title = [NSString stringWithFormat:@"%@ — %@", self.workspace.name, _activePane.terminalVC.title];
         }
-        [_tabView removeTabViewItem:item];
-        
-        NSInteger remainingCount = (NSInteger)_tabView.tabViewItems.count;
-        if (remainingCount > 0) {
-            NSInteger newIdx = MIN(idx, remainingCount - 1);
-            [_tabView selectTabViewItemAtIndex:newIdx];
+    } else if (self.view.window) {
+        self.view.window.title = self.workspace.name;
+    }
+}
+
+- (void)setRootPane:(NSViewController *)newVC {
+    for (NSViewController *child in [self.paneContainerVC.childViewControllers copy]) {
+        [child.view removeFromSuperview];
+        [child removeFromParentViewController];
+    }
+    
+    [self.paneContainerVC addChildViewController:newVC];
+    NSView *newView = newVC.view;
+    newView.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.paneContainerVC.view addSubview:newView];
+    
+    // Safe Auto Layout constraints
+    [NSLayoutConstraint activateConstraints:@[
+        [newView.topAnchor constraintEqualToAnchor:self.paneContainerVC.view.topAnchor],
+        [newView.bottomAnchor constraintEqualToAnchor:self.paneContainerVC.view.bottomAnchor],
+        [newView.leadingAnchor constraintEqualToAnchor:self.paneContainerVC.view.leadingAnchor],
+        [newView.trailingAnchor constraintEqualToAnchor:self.paneContainerVC.view.trailingAnchor]
+    ]];
+    
+    self.emptyStateLabel.hidden = YES;
+}
+
+- (void)replaceViewController:(NSViewController *)oldVC withViewController:(NSViewController *)newVC {
+    NSViewController *parent = oldVC.parentViewController;
+    
+    if ([parent isKindOfClass:[NSSplitViewController class]]) {
+        NSSplitViewController *split = (NSSplitViewController *)parent;
+        NSInteger idx = -1;
+        for (NSUInteger i = 0; i < split.splitViewItems.count; i++) {
+            if (split.splitViewItems[i].viewController == oldVC) {
+                idx = i; break;
+            }
         }
-        [self updateCustomTabBar];
+        if (idx >= 0) {
+            NSSplitViewItem *newItem = [NSSplitViewItem splitViewItemWithViewController:newVC];
+            [split insertSplitViewItem:newItem atIndex:idx];
+            [split removeSplitViewItem:split.splitViewItems[idx + 1]];
+        }
+    } else if (parent == self.paneContainerVC) {
+        [self setRootPane:newVC];
     }
 }
 
-- (void)tabCloseClicked:(NSButton *)sender {
-    [self closeTabAtIndex:sender.tag];
-}
-
-- (void)closeActiveTab {
-    NSTabViewItem *activeItem = _tabView.selectedTabViewItem;
-    if (activeItem) {
-        NSInteger idx = [_tabView indexOfTabViewItem:activeItem];
-        [self closeTabAtIndex:idx];
+- (DXSessionConfig *)findSessionConfigForTerminal:(TerminalViewController *)term {
+    for (DXWorkspaceGroup *group in self.workspace.groups) {
+        for (DXSessionConfig *cfg in group.sessions) {
+            if ([cfg.host isEqualToString:term.host] && cfg.port == term.port) {
+                return cfg;
+            }
+        }
     }
+    return nil;
 }
 
 #pragma mark - WorkspaceSidebarDelegate
 
 - (void)sidebarDidRequestConnectionToSession:(DXSessionConfig *)sessionConfig {
-    NSString *tabTitle = sessionConfig.name.length > 0 ? sessionConfig.name : [NSString stringWithFormat:@"%@:%d", sessionConfig.host, sessionConfig.port];
-    
-    for (NSUInteger i = 0; i < _tabView.tabViewItems.count; i++) {
-        NSTabViewItem *item = _tabView.tabViewItems[i];
-        if ([item.label isEqualToString:tabTitle]) {
-            [_tabView selectTabViewItemAtIndex:i];
-            [self updateCustomTabBar];
-            return;
-        }
-    }
-    
     TerminalViewController *termVC = [[TerminalViewController alloc]
                                       initWithHost:sessionConfig.host
                                       port:sessionConfig.port
@@ -194,26 +165,142 @@
                                       model:(x3270::TerminalModel)sessionConfig.model
                                       protocol:(x3270::TerminalProtocol)sessionConfig.protocol];
     
+    NSString *tabTitle = sessionConfig.name.length > 0 ? sessionConfig.name : [NSString stringWithFormat:@"%@:%d", sessionConfig.host, sessionConfig.port];
     termVC.title = tabTitle;
-    [self addChildViewController:termVC];
     
-    NSTabViewItem *tabItem = [[NSTabViewItem alloc] initWithIdentifier:termVC];
-    tabItem.label = tabTitle;
-    tabItem.view = termVC.view;
+    TerminalPaneViewController *newPane = [[TerminalPaneViewController alloc] initWithTerminal:termVC];
+    newPane.delegate = self;
+    [self.allPanes addObject:newPane];
     
-    [_tabView addTabViewItem:tabItem];
-    [_tabView selectTabViewItem:tabItem];
+    if (self.allPanes.count == 1) {
+        [self setRootPane:newPane];
+        [self setActivePane:newPane];
+    } else if (self.activePane) {
+        [self replaceViewController:self.activePane withViewController:newPane];
+        [self.allPanes removeObject:self.activePane];
+        [self.activePane.terminalVC disconnectSession];
+        [self setActivePane:newPane];
+    }
+}
+
+#pragma mark - TerminalPaneDelegate
+
+- (void)paneDidGainFocus:(TerminalPaneViewController *)pane {
+    [self setActivePane:pane];
+}
+
+- (void)paneDidRequestSplitRight:(TerminalPaneViewController *)pane {
+    [self splitPane:pane isVertical:YES];
+}
+
+- (void)paneDidRequestSplitDown:(TerminalPaneViewController *)pane {
+    [self splitPane:pane isVertical:NO];
+}
+
+- (void)splitPane:(TerminalPaneViewController *)pane isVertical:(BOOL)isVertical {
+    DXSessionConfig *cfg = [self findSessionConfigForTerminal:pane.terminalVC];
+    if (!cfg) {
+        NSBeep();
+        return; 
+    }
     
-    [self updateCustomTabBar];
+    TerminalViewController *newTerm = [[TerminalViewController alloc]
+                                      initWithHost:cfg.host
+                                      port:cfg.port
+                                      useSSL:cfg.useSSL
+                                      verifyCert:cfg.verifyCert
+                                      caBundle:cfg.caBundle
+                                      codePage:(x3270::CodePage)cfg.codePage
+                                      model:(x3270::TerminalModel)cfg.model
+                                      protocol:(x3270::TerminalProtocol)cfg.protocol];
+    newTerm.title = pane.terminalVC.title;
+    
+    TerminalPaneViewController *newPane = [[TerminalPaneViewController alloc] initWithTerminal:newTerm];
+    newPane.delegate = self;
+    [self.allPanes addObject:newPane];
+    
+    NSSplitViewController *splitVC = [[NSSplitViewController alloc] init];
+    splitVC.splitView.vertical = isVertical;
+    splitVC.splitView.dividerStyle = NSSplitViewDividerStyleThin;
+    
+    [self replaceViewController:pane withViewController:splitVC];
+    
+    [splitVC addSplitViewItem:[NSSplitViewItem splitViewItemWithViewController:pane]];
+    [splitVC addSplitViewItem:[NSSplitViewItem splitViewItemWithViewController:newPane]];
+    
+    [self setActivePane:newPane];
+}
+
+- (void)paneDidRequestClose:(TerminalPaneViewController *)pane {
+    [pane.terminalVC disconnectSession];
+    [self.allPanes removeObject:pane];
+    
+    NSViewController *parent = pane.parentViewController;
+    
+    if ([parent isKindOfClass:[NSSplitViewController class]]) {
+        NSSplitViewController *splitVC = (NSSplitViewController *)parent;
+        
+        NSSplitViewItem *itemToRemove = nil;
+        for (NSSplitViewItem *item in splitVC.splitViewItems) {
+            if (item.viewController == pane) {
+                itemToRemove = item;
+                break;
+            }
+        }
+        if (itemToRemove) {
+            [splitVC removeSplitViewItem:itemToRemove];
+        }
+        
+        // Auto-cleanup post-removal with safe unlinking
+        if (splitVC.splitViewItems.count == 1) {
+            NSSplitViewItem *remainingItem = splitVC.splitViewItems.firstObject;
+            NSViewController *remainingChild = remainingItem.viewController;
+            
+            [splitVC removeSplitViewItem:remainingItem];
+            [remainingChild.view removeFromSuperview];
+            [remainingChild removeFromParentViewController];
+            
+            [self replaceViewController:splitVC withViewController:remainingChild];
+        }
+    } else if (parent == self.paneContainerVC) {
+        // Closed the last root pane
+        [pane.view removeFromSuperview];
+        [pane removeFromParentViewController];
+        self.emptyStateLabel.hidden = NO;
+        if (self.view.window) {
+            self.view.window.title = self.workspace.name;
+        }
+    }
+    
+    if (self.activePane == pane) {
+        if (self.allPanes.count > 0) {
+            [self setActivePane:self.allPanes.lastObject];
+        } else {
+            [self setActivePane:nil];
+        }
+    }
+}
+
+#pragma mark - Global Actions
+
+- (void)closeActiveTab {
+    if (self.activePane) {
+        [self paneDidRequestClose:self.activePane];
+    }
 }
 
 - (void)disconnectAllSessions {
-    for (NSTabViewItem *item in _tabView.tabViewItems) {
-        if ([item.identifier isKindOfClass:[TerminalViewController class]]) {
-            TerminalViewController *termVC = (TerminalViewController *)item.identifier;
-            [termVC disconnectSession];
-        }
+    for (TerminalPaneViewController *pane in self.allPanes) {
+        [pane.terminalVC disconnectSession];
     }
+    [self.allPanes removeAllObjects];
+}
+
+- (void)toggleTransferSidebar:(id)sender {
+    [NSAnimationContext runAnimationGroup:^(NSAnimationContext *context) {
+        context.duration = 0.25;
+        self.transferSidebarItem.animator.collapsed = !self.transferSidebarItem.isCollapsed;
+    } completionHandler:nil];
 }
 
 @end

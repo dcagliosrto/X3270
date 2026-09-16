@@ -64,11 +64,8 @@
 }
 
 - (TerminalViewController *)activeTerminalTab {
-    NSTabViewItem *activeItem = _workspaceVC.tabView.selectedTabViewItem;
-    if ([activeItem.identifier isKindOfClass:[TerminalViewController class]]) {
-        return (TerminalViewController *)activeItem.identifier;
-    }
-    return nil;
+    // Now we directly use the new property exposed by the WorkspaceViewController
+    return _workspaceVC.activeTerminal;
 }
 
 - (IBAction)closeTab:(id)sender {
@@ -78,7 +75,7 @@
 - (IBAction)saveScreenshot:(id)sender { [[self activeTerminalTab] saveScreenshot:sender]; }
 - (IBAction)exportText:(id)sender { [[self activeTerminalTab] exportText:sender]; }
 - (IBAction)toggleVideoRecording:(id)sender { [[self activeTerminalTab] toggleVideoRecording:sender]; }
-- (void)toggleTransferSidebar:(id)sender { [[self activeTerminalTab] toggleTransferSidebar:sender]; }
+- (void)toggleTransferSidebar:(id)sender { [_workspaceVC toggleTransferSidebar:sender]; }
 - (void)toggleTimeMachine:(id)sender { [[self activeTerminalTab] toggleTimeMachine:sender]; }
-
+- (IBAction)reconnectActiveSession:(id)sender {[[self activeTerminalTab] reconnectSession]; }
 @end
