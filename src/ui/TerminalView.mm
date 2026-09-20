@@ -848,6 +848,16 @@ static constexpr CGFloat kGocaCellH = 12.0; // must match AH in buildQueryReply(
 // lookup, or on certain keyboard layouts).  Mirror the PF-key logic here so
 // those events are not silently dropped.
 - (BOOL)performKeyEquivalent:(NSEvent *)event {
+    // If the active view with focus in the window is NOT this TerminalView,
+    // ignore the event to allow the active view to handle it.
+    NSResponder *firstResponder = self.window.firstResponder;
+    if ([firstResponder isKindOfClass:[NSView class]]) {
+        NSView *focusView = (NSView *)firstResponder;
+        if (focusView != self && ![focusView isDescendantOf:self]) {
+            return NO;
+        }
+    }
+
     if (!_kbd && !_kbd5250) return NO;
 
     NSUInteger modifiers = event.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask;
@@ -856,9 +866,7 @@ static constexpr CGFloat kGocaCellH = 12.0; // must match AH in buildQueryReply(
                   ? [event.charactersIgnoringModifiers characterAtIndex:0] : 0;
     BOOL shiftDown = (modifiers & NSEventModifierFlagShift) != 0;
 
-    // ⌘ + I — toggle insert mode (Mac alternative to the PC Insert key,
-    // since most Mac keyboards — especially MacBooks — have no Insert key).
-    // Intercept before the Cmd-passthrough so it does not fall through to the menu.
+    // ⌘ + I — toggle insert mode
     if ((modifiers & NSEventModifierFlagCommand) &&
         !(modifiers & (NSEventModifierFlagOption | NSEventModifierFlagControl)) &&
         (key == 'i' || key == 'I')) {

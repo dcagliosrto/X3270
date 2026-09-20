@@ -120,6 +120,12 @@
 
 - (void)mouseDown:(NSEvent *)event {
     [super mouseDown:event];
+    
+    // Officially move the window's First Responder to the terminal of this panel
+    if (self.terminalVC && self.terminalVC.view) {
+        [self.view.window makeFirstResponder:self.terminalVC.view];
+    }
+
     if (self.delegate) [self.delegate paneDidGainFocus:self];
 }
 
