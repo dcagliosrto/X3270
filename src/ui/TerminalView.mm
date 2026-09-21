@@ -11,6 +11,9 @@
 #import "TimeMachineHUDView.h"
 #import "../utils/TimeMachineManager.h"
 #include "../utils/VideoRecorder.h"
+
+#include "ScreenStructuralAnalyzer.h"
+
 #include <string>
 #include <memory>
 
@@ -160,6 +163,8 @@ static NSColor *colorFor5250Attr(uint8_t attr) {
     x3270::KeyboardState5250* _kbd5250; // TN5250 keyboard (nil in 3270 mode)
     x3270::GraphicsBuffer* _graphics;   // GOCA drawing command list (3270 only)
     x3270::EbcdicCodec        _codec;
+
+    std::unique_ptr<dx3270::ScreenStructuralAnalyzer> _analyzer; // Screen structural analyzer instance
 
     x3270::MacroRecorder _macroRecorder; // Macro recorder instance
     std::unique_ptr<x3270::MacroRunner> _macroRunner; // Macro runner instance
@@ -322,6 +327,14 @@ static NSColor *colorFor5250Attr(uint8_t attr) {
     if (screen) {
         _rows = screen->rows();
         _cols = screen->cols();
+        // Initialize the screen structural analyzer for live JSON mapping
+        _analyzer = std::make_unique<dx3270::ScreenStructuralAnalyzer>(*_screen, _codec);
+        _analyzer->setOnStructureUpdated([](const dx3270::ScreenStructure& structure, const std::string& json) {
+            printf("\n=== [DX3270 LIVE JSON MAP - %s] ===\n%s\n===================================\n", 
+                   structure.panelTitle.c_str(), json.c_str());
+            fflush(stdout);
+        });
+
     }
 }
 
@@ -336,6 +349,14 @@ static NSColor *colorFor5250Attr(uint8_t attr) {
     if (screen) {
         _rows = screen->rows();
         _cols = screen->cols();
+
+        // Initialize the screen structural analyzer for live JSON mapping
+        _analyzer = std::make_unique<dx3270::ScreenStructuralAnalyzer>(*_screen, _codec);
+        _analyzer->setOnStructureUpdated([](const dx3270::ScreenStructure& structure, const std::string& json) {
+            printf("\n=== [DX3270 LIVE JSON MAP - %s] ===\n%s\n===================================\n", 
+                   structure.panelTitle.c_str(), json.c_str());
+            fflush(stdout);
+        });
     }
 }
 
@@ -346,6 +367,13 @@ static NSColor *colorFor5250Attr(uint8_t attr) {
 - (void)screenDidUpdate {
     dispatch_async(dispatch_get_main_queue(), ^{
         [self captureCurrentScreenSnapshot];
+        
+        // Protection against freeze: perform heuristic analysis only if the buffer is stable
+        if (self->_analyzer && self->_screen) {
+            // Execute the analysis on the Main Thread safely from concurrent writes
+            self->_analyzer->analyzeCurrentScreen();
+        }
+        
         [self setNeedsDisplay:YES];
     });
 }
