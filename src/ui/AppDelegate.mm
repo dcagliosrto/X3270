@@ -307,4 +307,11 @@
     }
 }
 
+- (void)openDebugWindow:(id)sender {
+    NSWindowController *activeWC = NSApp.keyWindow.windowController;
+    if ([activeWC respondsToSelector:@selector(openDebugWindow:)]) {
+        [activeWC performSelector:@selector(openDebugWindow:) withObject:sender];
+    }
+}
+
 @end

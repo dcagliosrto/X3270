@@ -104,4 +104,8 @@
     } completionHandler:nil];
 }
 
+- (IBAction)openDebugWindow:(id)sender {
+    [_terminalVC openDebugWindow:sender];
+}
+
 @end

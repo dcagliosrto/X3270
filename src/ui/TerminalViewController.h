@@ -43,6 +43,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (IBAction)exportText:(id)sender;
 - (IBAction)toggleVideoRecording:(id)sender;
 - (IBAction)toggleTimeMachine:(id)sender;
+- (IBAction)openDebugWindow:(id)sender;
 
 @end
 

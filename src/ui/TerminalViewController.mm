@@ -600,4 +600,11 @@ static NSString * const kDX3270BroadcastOOBNotification  = @"DX3270BroadcastOOBN
     [self toggleTimeMachine:self];
 }
 
+
+- (IBAction)openDebugWindow:(id)sender {
+    if (_debugWC) {
+        [_debugWC showWindow:sender];
+        [_debugWC.window makeKeyAndOrderFront:sender];
+    }
+}
 @end

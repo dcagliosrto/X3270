@@ -72,6 +72,10 @@
     [_workspaceVC closeActiveTab];
 }
 
+- (IBAction)openDebugWindow:(id)sender {
+    [[self activeTerminalTab] openDebugWindow:sender];
+}
+
 - (IBAction)saveScreenshot:(id)sender { [[self activeTerminalTab] saveScreenshot:sender]; }
 - (IBAction)exportText:(id)sender { [[self activeTerminalTab] exportText:sender]; }
 - (IBAction)toggleVideoRecording:(id)sender { [[self activeTerminalTab] toggleVideoRecording:sender]; }

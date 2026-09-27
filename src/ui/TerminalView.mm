@@ -366,14 +366,14 @@ static NSColor *colorFor5250Attr(uint8_t attr) {
 
 - (void)screenDidUpdate {
     dispatch_async(dispatch_get_main_queue(), ^{
+        if (self->_screen) {
+            self->_rows = self->_screen->rows();
+            self->_cols = self->_screen->cols();
+        }
         [self captureCurrentScreenSnapshot];
-        
-        // Protection against freeze: perform heuristic analysis only if the buffer is stable
         if (self->_analyzer && self->_screen) {
-            // Execute the analysis on the Main Thread safely from concurrent writes
             self->_analyzer->analyzeCurrentScreen();
         }
-        
         [self setNeedsDisplay:YES];
     });
 }
