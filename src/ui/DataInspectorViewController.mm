@@ -30,23 +30,47 @@
 #pragma mark - View Lifecycle
 
 - (void)loadView {
-    // Extended view frame width and height to comfortably display wide HFP and STCK decodings
-    self.view = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 520, 480)];
+    NSStackView *mainStack = [[NSStackView alloc] initWithFrame:NSMakeRect(0, 0, 520, 480)];
+    mainStack.orientation = NSUserInterfaceLayoutOrientationVertical;
+    mainStack.edgeInsets = NSEdgeInsetsMake(10, 10, 10, 10);
+    mainStack.spacing = 10;
+    self.view = mainStack;
     
-    NSScrollView *scrollView = [[NSScrollView alloc] initWithFrame:NSInsetRect(self.view.bounds, 10, 10)];
+    // Scroller and TextView
+    NSScrollView *scrollView = [[NSScrollView alloc] init];
     scrollView.hasVerticalScroller = YES;
-    scrollView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    [scrollView setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationVertical];
     
-    _textView = [[NSTextView alloc] initWithFrame:scrollView.bounds];
+    _textView = [[NSTextView alloc] initWithFrame:NSMakeRect(0, 0, 500, 460)];
     _textView.autoresizingMask = NSViewWidthSizable;
     _textView.drawsBackground = NO;
     _textView.editable = NO;
     _textView.selectable = YES;
     
     scrollView.documentView = _textView;
-    [self.view addSubview:scrollView];
+    [mainStack addArrangedSubview:scrollView];
+    
+    // --- IPCS POINTER DETECTION ENGINE ---
+    NSString *cleanStr = [_decodedString stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    NSRegularExpression *regex = [NSRegularExpression regularExpressionWithPattern:@"^[0-9A-Fa-f]{8}$|^[0-9A-Fa-f]{16}$" options:0 error:nil];
+    
+    if (cleanStr.length > 0 && [regex firstMatchInString:cleanStr options:0 range:NSMakeRange(0, cleanStr.length)]) {
+        NSButton *jumpBtn = [NSButton buttonWithTitle:[NSString stringWithFormat:@"  Jump to Address (L %@)", cleanStr.uppercaseString] target:self action:@selector(jumpClicked:)];
+        jumpBtn.bezelStyle = NSBezelStyleRounded;
+        jumpBtn.controlSize = NSControlSizeLarge;
+        jumpBtn.image = [NSImage imageWithSystemSymbolName:@"arrow.up.forward.app" accessibilityDescription:nil];
+        [jumpBtn setContentHuggingPriority:NSLayoutPriorityRequired forOrientation:NSLayoutConstraintOrientationVertical];
+        [mainStack addArrangedSubview:jumpBtn];
+    }
     
     [self decodeData];
+}
+
+- (void)jumpClicked:(id)sender {
+    NSString *cleanStr = [_decodedString stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (self.onAddressJump) {
+        self.onAddressJump(cleanStr);
+    }
 }
 
 #pragma mark - Primary Decoding Dispatcher

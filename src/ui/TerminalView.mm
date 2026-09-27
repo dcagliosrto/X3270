@@ -1229,11 +1229,16 @@ static constexpr CGFloat kGocaCellH = 12.0; // must match AH in buildQueryReply(
         minCol = MIN(c1, c2);
         maxCol = MAX(c1, c2);
     } else {
-        // Fallback: 16 contiguous columns on the clicked row
+        // Smart Word Extraction: automatically expands the selection to the entire word under the cursor
         minRow = offset / _cols;
         maxRow = minRow;
-        minCol = offset % _cols;
-        maxCol = MIN(minCol + 15, _cols - 1);
+        int clickCol = offset % _cols;
+        
+        minCol = clickCol;
+        while (minCol > 0 && _screen->at(minRow * _cols + (minCol - 1)).ch > 0x40) minCol--;
+        
+        maxCol = clickCol;
+        while (maxCol < _cols - 1 && _screen->at(minRow * _cols + (maxCol + 1)).ch > 0x40) maxCol++;
     }
     
     // --- Dynamic Bounds Cap ---
@@ -1315,38 +1320,142 @@ static constexpr CGFloat kGocaCellH = 12.0; // must match AH in buildQueryReply(
         }
     }
     
-    DataInspectorViewController *inspector = [[DataInspectorViewController alloc] initWithRawBytes:rawBytes decodedString:decodedText verticalHex:verticalHexBytes verticalDecodedString:verticalDecodedText];
+    // --- LOGIC BIFURCATION: Pointer Hopper vs Data Inspector ---
     
-    static NSPanel *inspectorPanel = nil;
+    // Clean the string from spaces and null bytes (which are translated to '.' visually)
+    NSString *cleanToken = [decodedText stringByTrimmingCharactersInSet:[NSCharacterSet characterSetWithCharactersInString:@" \n\r."]];
     
-    if (!inspectorPanel) {
-        inspectorPanel = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, 480, 450)
-                                                    styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskUtilityWindow | NSWindowStyleMaskResizable)
-                                                      backing:NSBackingStoreBuffered
-                                                        defer:NO];
-        inspectorPanel.title = @"Mainframe Data Inspector";
-        inspectorPanel.floatingPanel = YES;
-        inspectorPanel.releasedWhenClosed = NO;
-        inspectorPanel.hidesOnDeactivate = NO;
+    NSRegularExpression *ptrRegex = [NSRegularExpression regularExpressionWithPattern:@"^[0-9A-Fa-f]{8}$|^[0-9A-Fa-f]{16}$" options:0 error:nil];
+    BOOL isPointer = (cleanToken.length > 0 && [ptrRegex firstMatchInString:cleanToken options:0 range:NSMakeRange(0, cleanToken.length)] != nil);
+
+    if (isPointer) {
+        // =========================================================
+        // 1. POINTER HOPPER (Contextual Mini Popover)
+        // =========================================================
         
-        // Listen for the window closing to clear the red bounding box
-        [[NSNotificationCenter defaultCenter] addObserverForName:NSWindowWillCloseNotification
-                                                          object:inspectorPanel
-                                                           queue:[NSOperationQueue mainQueue]
-                                                      usingBlock:^(NSNotification * _Nonnull note) {
-            self.hasInspectedBlock = NO;
-            [self setNeedsDisplay:YES];
-        }];
+        // Close any existing popover to reset the state safely
+        if (_dataInspectorPopover && _dataInspectorPopover.isShown) {
+            [_dataInspectorPopover close];
+        }
+        
+        NSViewController *jumpVC = [[NSViewController alloc] init];
+        NSView *container = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 220, 48)];
+        
+        NSButton *jumpBtn = [NSButton buttonWithTitle:[NSString stringWithFormat:@"Jump to (L %@)", cleanToken.uppercaseString] 
+                                               target:self 
+                                               action:@selector(executePointerJump:)];
+        
+        jumpBtn.identifier = cleanToken.uppercaseString;
+        jumpBtn.bezelStyle = NSBezelStyleRounded;
+        jumpBtn.image = [NSImage imageWithSystemSymbolName:@"arrow.up.forward.app" accessibilityDescription:nil];
+        
+        // CRITICAL FIX 1: Force the button to display both the image and the text.
+        // Without this, NSPopover will crush the button into an "Image Only" square.
+        jumpBtn.imagePosition = NSImageLeft;
+        
+        // CRITICAL FIX 2: Lock the dimensions using Auto Layout so the popover cannot shrink it.
+        jumpBtn.translatesAutoresizingMaskIntoConstraints = NO;
+        [container addSubview:jumpBtn];
+        
+        [NSLayoutConstraint activateConstraints:@[
+            [jumpBtn.centerXAnchor constraintEqualToAnchor:container.centerXAnchor],
+            [jumpBtn.centerYAnchor constraintEqualToAnchor:container.centerYAnchor],
+            [jumpBtn.widthAnchor constraintEqualToConstant:190],
+            [jumpBtn.heightAnchor constraintEqualToConstant:28]
+        ]];
+        
+        jumpVC.view = container;
+        
+        // Explicitly set the preferred size so the popover knows how large to draw itself
+        jumpVC.preferredContentSize = NSMakeSize(220, 48); 
+
+        if (!_dataInspectorPopover) {
+            _dataInspectorPopover = [[NSPopover alloc] init];
+            _dataInspectorPopover.behavior = NSPopoverBehaviorTransient;
+            _dataInspectorPopover.appearance = [NSAppearance appearanceNamed:NSAppearanceNameVibrantDark];
+            
+            // Use weakSelf to prevent a retain cycle that could keep the red box stuck
+            __weak typeof(self) weakSelf = self;
+            [[NSNotificationCenter defaultCenter] addObserverForName:NSPopoverDidCloseNotification
+                                                              object:_dataInspectorPopover
+                                                               queue:[NSOperationQueue mainQueue]
+                                                          usingBlock:^(NSNotification * _Nonnull note) {
+                weakSelf.hasInspectedBlock = NO;
+                [weakSelf setNeedsDisplay:YES];
+            }];
+        }
+        
+        _dataInspectorPopover.contentViewController = jumpVC;
+        _dataInspectorPopover.contentSize = NSMakeSize(220, 48);
+        
+        // IMPORTANT: Calculate the scaling multipliers based on the current window bounds
+        NSSize prefSize = [self preferredSize];
+        CGFloat scaleX = self.bounds.size.width / prefSize.width;
+        CGFloat scaleY = self.bounds.size.height / prefSize.height;
+        
+        // Calculate the raw unscaled coordinates
+        CGFloat unscaledX = self.inspectedMinCol * _charW;
+        CGFloat unscaledY = prefSize.height - ((self.inspectedMaxRow + 1) * _charH);
+        CGFloat unscaledW = (self.inspectedMaxCol - self.inspectedMinCol + 1) * _charW;
+        CGFloat unscaledH = (self.inspectedMaxRow - self.inspectedMinRow + 1) * _charH;
+        
+        // Apply the affine transform scaling to the target rectangle
+        // This ensures the popover anchors perfectly to the scaled text on screen
+        NSRect targetRect = NSMakeRect(unscaledX * scaleX, 
+                                       unscaledY * scaleY, 
+                                       unscaledW * scaleX, 
+                                       unscaledH * scaleY);
+        
+        // Dispatch asynchronously to guarantee the current mouse tracking loop finishes.
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self->_dataInspectorPopover showRelativeToRect:targetRect ofView:self preferredEdge:NSRectEdgeMinY];
+        });
+        
+    } else {
+        // =========================================================
+        // 2. CLASSIC DATA INSPECTOR (Original NSPanel)
+        // =========================================================
+        DataInspectorViewController *inspector = [[DataInspectorViewController alloc] initWithRawBytes:rawBytes decodedString:decodedText verticalHex:verticalHexBytes verticalDecodedString:verticalDecodedText];
+        
+        static NSPanel *inspectorPanel = nil;
+        if (!inspectorPanel) {
+            inspectorPanel = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, 520, 480)
+                                                        styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskUtilityWindow | NSWindowStyleMaskResizable)
+                                                          backing:NSBackingStoreBuffered
+                                                            defer:NO];
+            inspectorPanel.title = @"Mainframe Data Inspector";
+            inspectorPanel.floatingPanel = YES;
+            inspectorPanel.releasedWhenClosed = NO;
+            inspectorPanel.hidesOnDeactivate = NO;
+            
+            [[NSNotificationCenter defaultCenter] addObserverForName:NSWindowWillCloseNotification
+                                                              object:inspectorPanel
+                                                               queue:[NSOperationQueue mainQueue]
+                                                          usingBlock:^(NSNotification * _Nonnull note) {
+                self.hasInspectedBlock = NO;
+                [self setNeedsDisplay:YES];
+            }];
+        }
+        
+        inspectorPanel.contentViewController = inspector;
+        
+        NSPoint screenPoint = [event.window convertPointToScreen:event.locationInWindow];
+        screenPoint.x += 15;
+        screenPoint.y -= 15;
+        
+        [inspectorPanel setFrameTopLeftPoint:screenPoint];
+        [inspectorPanel makeKeyAndOrderFront:nil];
     }
-    
-    inspectorPanel.contentViewController = inspector;
-    
-    NSPoint screenPoint = [event.window convertPointToScreen:event.locationInWindow];
-    screenPoint.x += 15;
-    screenPoint.y -= 15;
-    
-    [inspectorPanel setFrameTopLeftPoint:screenPoint];
-    [inspectorPanel makeKeyAndOrderFront:nil];
+}
+
+
+- (void)executePointerJump:(NSButton *)sender {
+    NSString *cmd = [NSString stringWithFormat:@"L %@", sender.identifier];
+    NSWindowController *wc = self.window.windowController;
+    if ([wc respondsToSelector:@selector(executeISPFCommandLocally:)]) {
+        [wc performSelector:@selector(executeISPFCommandLocally:) withObject:cmd];
+    }
+    [_dataInspectorPopover close];
 }
 
 - (void)mouseDragged:(NSEvent *)event {
