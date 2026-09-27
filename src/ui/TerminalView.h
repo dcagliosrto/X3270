@@ -54,6 +54,9 @@ extern NSString * const kPrefCrosshairRuler;
 - (BOOL)isVideoRecording;
 
 
+/// Toggle Smart Log Isolator mode (Off -> Dimming -> Strict -> Off)
+- (void)toggleLogIsolatorMode;
+
 /// Macro recording and playback actions
 - (IBAction)startRecordingMacro:(id)sender;
 - (IBAction)stopRecordingMacro:(id)sender;

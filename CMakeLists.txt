@@ -25,6 +25,11 @@ set(CMAKE_OBJCXX_STANDARD_REQUIRED ON)
 
 # ── Dependencies ─────────────────────────────────────────────────────────────
 set(OPENSSL_USE_STATIC_LIBS TRUE)
+
+if(NOT DEFINED OPENSSL_ROOT_DIR AND EXISTS "/opt/homebrew/opt/openssl@3")
+    set(OPENSSL_ROOT_DIR "/opt/homebrew/opt/openssl@3")
+endif()
+
 find_package(OpenSSL REQUIRED)
 
 # ── 1. Core C++ Engine (Static Shared Library) ──────────────────────────
@@ -43,6 +48,7 @@ set(CORE_SOURCES
     src/core/MacroRecorder.cpp
     src/core/MacroRunner.cpp
     src/core/ScreenStructuralAnalyzer.cpp
+    src/core/LogIsolatorEngine.cpp
 )
 
 add_library(dx3270_core STATIC ${CORE_SOURCES})

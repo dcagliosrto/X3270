@@ -4,6 +4,7 @@
 #include "EbcdicCodec.h"
 #include "GraphicsBuffer.h"
 #import "DataInspectorViewController.h"
+#include "LogIsolatorEngine.h"
 #include "../core/MacroRecorder.h"
 #include "../core/MacroRunner.h"
 #include "../core/MacroSerializer.h"
@@ -184,6 +185,8 @@ static NSColor *colorFor5250Attr(uint8_t attr) {
     
     int      _selStart; // Linear offset of selection start (-1 if none)
     int      _selEnd;   // Linear offset of selection end
+
+    dx3270::LogIsolatorEngine _logIsolator;
 }
 
 - (instancetype)initWithFrame:(NSRect)frame {
@@ -232,6 +235,12 @@ static NSColor *colorFor5250Attr(uint8_t attr) {
                selector:@selector(userDefaultsDidChange:)
                    name:NSUserDefaultsDidChangeNotification
                  object:nil];
+        // Initialize the current user for the log isolator engine
+        NSString *currentUser = [[NSUserDefaults standardUserDefaults] stringForKey:@"DX3270_TransferUser"];
+        if (!currentUser || currentUser.length == 0) {
+            currentUser = @"IBMUSER"; // Or your default ID
+        }
+        _logIsolator.setCurrentUser([currentUser UTF8String]);
     }
     return self;
 }
@@ -496,6 +505,26 @@ static NSColor *colorFor5250Attr(uint8_t attr) {
 
     // Draw each cell
     for (int row = 0; row < _rows; ++row) {
+
+        // =========================================================================
+        // STEP 1: Reconstruct the line and evaluate with the Isolator (BEFORE the column loop)
+        // =========================================================================
+        NSMutableString *lineText = [NSMutableString string];
+        for (int c = 0; c < _cols; ++c) {
+            const x3270::Cell& cell = _screen->at(row * _cols + c);
+            uint16_t uc = _codec.toUnicode(cell.ch);
+            [lineText appendFormat:@"%C", static_cast<unichar>((uc >= 0x20) ? uc : ' ')];
+        }
+
+        std::string cLineStr = [lineText UTF8String];
+        _logIsolator.inspectStreamForEvents(cLineStr); // Auto-intercettazione JOBID/ASID
+        dx3270::LineOwnership ownership = _logIsolator.evaluateLine(cLineStr);
+
+        // If the mode is Strict and the line is "Foreign" (other users), skip the entire line
+        if (_logIsolator.mode() == dx3270::FilterMode::Strict && ownership == dx3270::LineOwnership::Foreign) {
+            continue;
+        }
+
         for (int col = 0; col < _cols; ++col) {
             int pos = row * _cols + col;
             const x3270::Cell& cell = _screen->at(pos);
@@ -571,7 +600,12 @@ static NSColor *colorFor5250Attr(uint8_t attr) {
                     fg = [NSColor selectedTextColor];
                 }
             }
-
+            // =========================================================================
+            // STEP 2: Noise Dimming
+            // =========================================================================
+            if (_logIsolator.mode() == dx3270::FilterMode::Dimming && ownership == dx3270::LineOwnership::Foreign) {
+                fg = [fg colorWithAlphaComponent:0.25]; // Dim the foreground color to 25% opacity for foreign lines in Dimming mode
+            }
             // Calculate pixel coordinates (Y=0 is bottom in Cocoa)
             CGFloat cx = col * _charW;
             CGFloat cy = effectiveHeight - (row + 1) * _charH;
@@ -894,6 +928,14 @@ static constexpr CGFloat kGocaCellH = 12.0; // must match AH in buildQueryReply(
                   ? [event.charactersIgnoringModifiers characterAtIndex:0] : 0;
     BOOL shiftDown = (modifiers & NSEventModifierFlagShift) != 0;
 
+    // ⌘ + ⇧ + L — Toggle Smart Log Isolator
+    if ((modifiers & NSEventModifierFlagCommand) &&
+        (modifiers & NSEventModifierFlagShift) &&
+        (key == 'l' || key == 'L')) {
+        [self toggleLogIsolatorMode];
+        return YES;
+    }
+
     // ⌘ + I — toggle insert mode
     if ((modifiers & NSEventModifierFlagCommand) &&
         !(modifiers & (NSEventModifierFlagOption | NSEventModifierFlagControl)) &&
@@ -1095,6 +1137,34 @@ static constexpr CGFloat kGocaCellH = 12.0; // must match AH in buildQueryReply(
 }
 
 - (void)mouseDown:(NSEvent *)event {
+    // Option + Shift + Click = Instantly set the isolation filter on the clicked word
+    if (([event modifierFlags] & NSEventModifierFlagOption) && ([event modifierFlags] & NSEventModifierFlagShift)) {
+        NSPoint pt = [self convertPoint:[event locationInWindow] fromView:nil];
+        int offset = [self offsetForPoint:pt];
+        if (offset >= 0 && _screen) {
+            int row = offset / _cols;
+            int col = offset % _cols;
+            
+            // Extract the word (Jobname, ASID, error code) under the cursor
+            int startCol = col, endCol = col;
+            while (startCol > 0 && _screen->at(row * _cols + (startCol - 1)).ch > 0x40) startCol--;
+            while (endCol < _cols - 1 && _screen->at(row * _cols + (endCol + 1)).ch > 0x40) endCol++;
+            
+            NSMutableString *token = [NSMutableString string];
+            for (int c = startCol; c <= endCol; c++) {
+                uint16_t uc = _codec.toUnicode(_screen->at(row * _cols + c).ch);
+                if (uc > 0x20) [token appendFormat:@"%C", (unichar)uc];
+            }
+            
+            if (token.length > 0) {
+                _logIsolator.setFilterPattern([token UTF8String]);
+                _logIsolator.setMode(dx3270::FilterMode::Dimming);
+                [self setNeedsDisplay:YES];
+            }
+        }
+        return;
+    }
+    
     if (!_screen) return;
     
     NSPoint pt = [self convertPoint:[event locationInWindow] fromView:nil];
@@ -1562,6 +1632,52 @@ static constexpr CGFloat kGocaCellH = 12.0; // must match AH in buildQueryReply(
 
 - (void)toggleCrosshairRuler {
     self.showCrosshairRuler = !self.showCrosshairRuler;
+    [self setNeedsDisplay:YES];
+}
+
+
+- (void)toggleLogIsolatorMode {
+    using namespace dx3270;
+    
+    // 1. If you have selected text with the mouse, use it as the filter key
+    if (_selStart != -1 && _selEnd != -1 && _screen) {
+        int r1 = _selStart / _cols, c1 = _selStart % _cols;
+        int r2 = _selEnd / _cols,   c2 = _selEnd % _cols;
+        int minRow = MIN(r1, r2), maxRow = MAX(r1, r2);
+        int minCol = MIN(c1, c2), maxCol = MAX(c1, c2);
+        
+        NSMutableString *selectedText = [NSMutableString string];
+        for (int r = minRow; r <= maxRow; ++r) {
+            for (int c = minCol; c <= maxCol; ++c) {
+                const x3270::Cell& cell = _screen->at(r * _cols + c);
+                uint16_t uc = _codec.toUnicode(cell.ch);
+                if (uc > 0x20) [selectedText appendFormat:@"%C", (unichar)uc];
+            }
+        }
+        
+        NSString *trimmed = [selectedText stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        if (trimmed.length > 0) {
+            _logIsolator.setFilterPattern([trimmed UTF8String]);
+            _logIsolator.setMode(FilterMode::Dimming);
+            
+            // Clear the visual selection to better show the filter
+            _selStart = -1;
+            _selEnd = -1;
+            
+            [self setNeedsDisplay:YES];
+            return;
+        }
+    }
+
+    // 2. If no text is selected, cycle through the modes: Off -> Dimming -> Strict -> Off
+    if (_logIsolator.mode() == FilterMode::Off) {
+        _logIsolator.setMode(FilterMode::Dimming);
+    } else if (_logIsolator.mode() == FilterMode::Dimming) {
+        _logIsolator.setMode(FilterMode::Strict);
+    } else {
+        _logIsolator.setMode(FilterMode::Off);
+        _logIsolator.setFilterPattern(""); // Reset the pattern
+    }
     [self setNeedsDisplay:YES];
 }
 
