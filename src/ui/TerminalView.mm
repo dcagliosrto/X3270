@@ -475,6 +475,32 @@ static NSColor *colorFor5250Attr(uint8_t attr) {
                     NSRectFill(NSMakeRect(cx, cy, _charW, _charH));
                 }
 
+// Overlay Selezione Testo Storico
+                if (_selStart != -1 && _selEnd != -1) {
+                    int r1 = _selStart / snap.cols, c1 = _selStart % snap.cols;
+                    int r2 = _selEnd / snap.cols, c2 = _selEnd % snap.cols;
+                    int minRow = MIN(r1, r2), maxRow = MAX(r1, r2);
+                    int minCol = MIN(c1, c2), maxCol = MAX(c1, c2);
+                    
+                    if (row >= minRow && row <= maxRow && col >= minCol && col <= maxCol) {
+                        [[NSColor selectedTextBackgroundColor] setFill];
+                        NSRectFillUsingOperation(NSMakeRect(cx, cy, _charW, _charH), NSCompositingOperationSourceOver);
+                    }
+                }
+
+                // Overlay selection for live mode
+                if (_selStart != -1 && _selEnd != -1) {
+                    int r1 = _selStart / snap.cols, c1 = _selStart % snap.cols;
+                    int r2 = _selEnd / snap.cols, c2 = _selEnd % snap.cols;
+                    int minRow = MIN(r1, r2), maxRow = MAX(r1, r2);
+                    int minCol = MIN(c1, c2), maxCol = MAX(c1, c2);
+                    
+                    if (row >= minRow && row <= maxRow && col >= minCol && col <= maxCol) {
+                        [[NSColor selectedTextBackgroundColor] setFill];
+                        NSRectFillUsingOperation(NSMakeRect(cx, cy, _charW, _charH), NSCompositingOperationSourceOver);
+                    }
+                }
+
                 if (uc > 0x20) {
                     NSString *ch = [NSString stringWithCharacters:&uc length:1];
                     NSColor *textColor = isModified ? [NSColor colorWithCalibratedRed:1.0 green:0.92 blue:0.30 alpha:1.0] : nativeFg;
@@ -491,7 +517,6 @@ static NSColor *colorFor5250Attr(uint8_t attr) {
         [NSGraphicsContext restoreGraphicsState];
         return;
     }
-
     // --- LIVE STANDARD MODE ---
     [_backgroundColor setFill];
     NSRectFill(self.bounds);
@@ -1147,9 +1172,17 @@ static constexpr CGFloat kGocaCellH = 12.0; // must match AH in buildQueryReply(
 }
 
 - (void)mouseDown:(NSEvent *)event {
+    // If the Time Machine is active and the click is on the HUD, let the HUD handle it
+    if (self.isTimeMachineActive && self.timeMachineHUD) {
+        NSPoint locationInSelf = [self convertPoint:[event locationInWindow] fromView:nil];
+        if (NSPointInRect(locationInSelf, self.timeMachineHUD.frame)) {
+            [super mouseDown:event];
+            return;
+        }
+    }
+
     // Option + Shift + Click = Instantly set the isolation filter on the clicked word
-    if (([event modifierFlags] & NSEventModifierFlagOption) && ([event modifierFlags] & NSEventModifierFlagShift)) {
-        NSPoint pt = [self convertPoint:[event locationInWindow] fromView:nil];
+    if (([event modifierFlags] & NSEventModifierFlagOption) && ([event modifierFlags] & NSEventModifierFlagShift)) {        NSPoint pt = [self convertPoint:[event locationInWindow] fromView:nil];
         int offset = [self offsetForPoint:pt];
         if (offset >= 0 && _screen) {
             int row = offset / _cols;
@@ -1642,15 +1675,16 @@ static constexpr CGFloat kGocaCellH = 12.0; // must match AH in buildQueryReply(
 }
 
 - (void)copy:(id)sender {
-    if (!_screen || _selStart == -1 || _selEnd == -1) {
+    if (_selStart == -1 || _selEnd == -1) {
         NSBeep();
         return;
     }
     
-    int r1 = _selStart / _cols;
-    int c1 = _selStart % _cols;
-    int r2 = _selEnd / _cols;
-    int c2 = _selEnd % _cols;
+    int cols = self.isTimeMachineActive ? _cols : (_screen ? _screen->cols() : _cols);
+    int r1 = _selStart / cols;
+    int c1 = _selStart % cols;
+    int r2 = _selEnd / cols;
+    int c2 = _selEnd % cols;
     
     int minRow = MIN(r1, r2);
     int maxRow = MAX(r1, r2);
@@ -1659,94 +1693,53 @@ static constexpr CGFloat kGocaCellH = 12.0; // must match AH in buildQueryReply(
     
     NSMutableString *copiedText = [NSMutableString string];
     
-    for (int r = minRow; r <= maxRow; ++r) {
-        NSMutableString *rowText = [NSMutableString string];
+    if (self.isTimeMachineActive) {
+        // --- Extraction from TIME MACHINE ---
+        ScreenSnapshot *snap = [[TimeMachineManager sharedManager] snapshotAtIndex:self.currentTimeMachineIndex];
+        if (!snap) return;
+        const unichar *chars = (const unichar *)snap.characterBuffer.bytes;
         
-        for (int c = minCol; c <= maxCol; ++c) {
-            int pos = r * _cols + c;
-            const x3270::Cell& cell = _screen->at(pos);
-            
-            if (cell.isFA || cell.isNonDisplay() || cell.ch == 0x00) {
-                [rowText appendString:@" "];
-            } else {
-                uint16_t uc = _codec.toUnicode(cell.ch);
+        for (int r = minRow; r <= maxRow; ++r) {
+            NSMutableString *rowText = [NSMutableString string];
+            for (int c = minCol; c <= maxCol; ++c) {
+                int pos = r * snap.cols + c;
+                unichar uc = chars[pos];
                 if (uc >= 0x20) {
-                    [rowText appendFormat:@"%C", (unichar)uc];
+                    [rowText appendFormat:@"%C", uc];
                 } else {
                     [rowText appendString:@" "];
                 }
             }
+            [copiedText appendString:rowText];
+            if (r < maxRow) [copiedText appendString:@"\n"];
         }
-        
-        [copiedText appendString:rowText];
-        
-        if (r < maxRow) {
-            [copiedText appendString:@"\n"];
+    } else {
+        // --- Extraction from LIVE SCREEN ---
+        if (!_screen) return;
+        for (int r = minRow; r <= maxRow; ++r) {
+            NSMutableString *rowText = [NSMutableString string];
+            for (int c = minCol; c <= maxCol; ++c) {
+                int pos = r * _cols + c;
+                const x3270::Cell& cell = _screen->at(pos);
+                if (cell.isFA || cell.isNonDisplay() || cell.ch == 0x00) {
+                    [rowText appendString:@" "];
+                } else {
+                    uint16_t uc = _codec.toUnicode(cell.ch);
+                    if (uc >= 0x20) {
+                        [rowText appendFormat:@"%C", (unichar)uc];
+                    } else {
+                        [rowText appendString:@" "];
+                    }
+                }
+            }
+            [copiedText appendString:rowText];
+            if (r < maxRow) [copiedText appendString:@"\n"];
         }
     }
     
     NSPasteboard *pb = [NSPasteboard generalPasteboard];
     [pb clearContents];
     [pb setString:copiedText forType:NSPasteboardTypeString];
-}
-
-- (void)paste:(id)sender {
-    if (!_kbd && !_kbd5250) return;
-    
-    NSPasteboard *pb = [NSPasteboard generalPasteboard];
-    NSString *text = [pb stringForType:NSPasteboardTypeString];
-    
-    if (!text || text.length == 0) {
-        NSBeep();
-        return;
-    }
-    
-    // Memorize the exact column where the user starts pasting
-    int startCol = 0;
-    if (_screen) {
-        startCol = _screen->cursorPos() % _cols;
-    }
-    
-    for (NSUInteger i = 0; i < text.length; i++) {
-        unichar c = [text characterAtIndex:i];
-        
-        // Ignore completely the 'Carriage Return' (\r) to avoid double newlines
-        // (Windows texts with \r\n will become simple \n)
-        if (c == '\r') {
-            continue;
-        }
-        
-        BOOL success = NO;
-        
-        if (c == '\n') {
-            // Paste in Block Mode: move down one row and align precisely to the starting column, 
-            // ignoring ISPF row numbers.
-            if (_screen) {
-                int curRow = _screen->cursorPos() / _cols;
-                int nextRow = curRow + 1;
-                
-                if (nextRow < _rows) {
-                    _screen->setCursor(nextRow * _cols + startCol);
-                    success = YES;
-                } else {
-                    success = NO; // Reached the bottom of the screen
-                }
-            }
-        } else {
-            // Digit the EBCDIC character normally
-            uint8_t ebcdic = [self ebcdicForUnichar:c];
-            if (_kbd) success = _kbd->handleEbcdicChar(ebcdic);
-            else if (_kbd5250) success = _kbd5250->handleEbcdicChar(ebcdic);
-        }
-        
-        // Stop the paste (and emit a beep) if we hit a protected field or the end of the screen
-        if (!success) {
-            NSBeep();
-            break;
-        }
-    }
-    
-    [self setNeedsDisplay:YES];
 }
 
 - (void)toggleCrosshairRuler {
