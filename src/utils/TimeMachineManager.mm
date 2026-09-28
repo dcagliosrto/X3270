@@ -7,6 +7,7 @@ static const NSUInteger kMaxSnapshots = 50;
 
 @interface TimeMachineManager ()
 @property (nonatomic, strong) NSMutableArray<ScreenSnapshot *> *history;
+@property (nonatomic, strong) NSMutableSet<NSNumber *> *internalPinnedIndices; // Internal set for managing pinned indices
 @end
 
 @implementation TimeMachineManager
@@ -24,8 +25,20 @@ static const NSUInteger kMaxSnapshots = 50;
     self = [super init];
     if (self) {
         _history = [NSMutableArray array];
+        _internalPinnedIndices = [NSMutableSet set];
+        _baselinePinIndex = -1;
     }
     return self;
+}
+
+// Baseline Pin Management
+- (void)setBaselinePinIndex:(NSInteger)index {
+    _baselinePinIndex = index;
+}
+
+// Read-only property for external access
+- (NSSet<NSNumber *> *)pinnedIndices {
+    return [_internalPinnedIndices copy];
 }
 
 - (void)captureSnapshotWithRows:(int)rows
@@ -36,12 +49,12 @@ static const NSUInteger kMaxSnapshots = 50;
                       cursorCol:(int)cursorCol {
     if (!chars || rows <= 0 || cols <= 0) return;
 
-    // Evita duplicati se il buffer non è cambiato rispetto all'ultimo snapshot
+    // Avoid duplicates if the buffer hasn't changed compared to the last snapshot
     NSData *charData = [NSData dataWithBytes:chars length:sizeof(unichar) * rows * cols];
     if (self.history.count > 0) {
         ScreenSnapshot *last = self.history.lastObject;
         if ([last.characterBuffer isEqualToData:charData]) {
-            return; // Nessun cambio schermo visibile
+            return; // No visible screen change
         }
     }
 
@@ -55,8 +68,19 @@ static const NSUInteger kMaxSnapshots = 50;
     snap.cursorCol = cursorCol;
 
     [self.history addObject:snap];
+    
+    // Handle the maximum limit: discard the oldest and "shift" the PINs to keep them consistent
     if (self.history.count > kMaxSnapshots) {
         [self.history removeObjectAtIndex:0];
+        
+        NSMutableSet<NSNumber *> *shiftedPins = [NSMutableSet set];
+        for (NSNumber *pin in self.internalPinnedIndices) {
+            NSInteger val = pin.integerValue;
+            if (val > 0) {
+                [shiftedPins addObject:@(val - 1)]; // Shift to the left. If it was 0, it disappears along with the  snapshot.
+            }
+        }
+        self.internalPinnedIndices = shiftedPins;
     }
 }
 
@@ -71,6 +95,7 @@ static const NSUInteger kMaxSnapshots = 50;
 
 - (void)clearHistory {
     [self.history removeAllObjects];
+    [self.internalPinnedIndices removeAllObjects];
 }
 
 - (NSArray<NSNumber *> *)compareSnapshot:(ScreenSnapshot *)snapA withSnapshot:(ScreenSnapshot *)snapB {
@@ -101,6 +126,39 @@ static const NSUInteger kMaxSnapshots = 50;
     }
 
     return [diffMap copy];
+}
+
+#pragma mark - Pinned Bookmarks Engine
+
+- (void)togglePinAtIndex:(NSInteger)index {
+    NSNumber *idx = @(index);
+    if ([self.internalPinnedIndices containsObject:idx]) {
+        [self.internalPinnedIndices removeObject:idx];
+    } else {
+        [self.internalPinnedIndices addObject:idx];
+    }
+}
+
+- (BOOL)isPinnedAtIndex:(NSInteger)index {
+    return [self.internalPinnedIndices containsObject:@(index)];
+}
+
+- (NSInteger)nextPinnedIndexAfter:(NSInteger)index {
+    // Sort the indices to find the next one in chronological order
+    NSArray *sortedPins = [[self.internalPinnedIndices allObjects] sortedArrayUsingSelector:@selector(compare:)];
+    for (NSNumber *pin in sortedPins) {
+        if (pin.integerValue > index) return pin.integerValue;
+    }
+    return -1; // Reached the end of the pins
+}
+
+- (NSInteger)prevPinnedIndexBefore:(NSInteger)index {
+    // Sort and iterate in reverse order
+    NSArray *sortedPins = [[self.internalPinnedIndices allObjects] sortedArrayUsingSelector:@selector(compare:)];
+    for (NSNumber *pin in [sortedPins reverseObjectEnumerator]) {
+        if (pin.integerValue < index) return pin.integerValue;
+    }
+    return -1; // Reached the beginning of the pins
 }
 
 @end

@@ -18,6 +18,8 @@ typedef NS_ENUM(NSInteger, CellDiffState) {
 @end
 
 @interface TimeMachineManager : NSObject
+@property (nonatomic, assign) NSInteger baselinePinIndex;
+@property (nonatomic, readonly) NSSet<NSNumber *> *pinnedIndices;
 
 + (instancetype)sharedManager;
 
@@ -35,5 +37,12 @@ typedef NS_ENUM(NSInteger, CellDiffState) {
 // Diff Engine
 - (NSArray<NSNumber *> *)compareSnapshot:(ScreenSnapshot *)snapA
                             withSnapshot:(ScreenSnapshot *)snapB;
+
+// Pinning
+- (void)togglePinAtIndex:(NSInteger)index;
+- (BOOL)isPinnedAtIndex:(NSInteger)index;
+- (NSInteger)nextPinnedIndexAfter:(NSInteger)index;
+- (NSInteger)prevPinnedIndexBefore:(NSInteger)index;
+- (void)setBaselinePinIndex:(NSInteger)index;
 
 @end
