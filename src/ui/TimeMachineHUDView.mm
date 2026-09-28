@@ -1,10 +1,17 @@
 #import "TimeMachineHUDView.h"
 
-@interface TimeMachineHUDView ()
+@interface TimeMachineHUDView () <NSSearchFieldDelegate>
 @property (nonatomic, strong) NSButton *prevButton;
 @property (nonatomic, strong) NSButton *nextButton;
 @property (nonatomic, strong) NSSlider *slider;
 @property (nonatomic, strong) NSTextField *infoLabel;
+
+// --- NEW PIN PROPERTIES ---
+@property (nonatomic, strong) NSButton *prevPinButton;
+@property (nonatomic, strong) NSButton *pinButton;
+@property (nonatomic, strong) NSButton *nextPinButton;
+
+@property (nonatomic, strong) NSSearchField *searchField;
 @property (nonatomic, strong) NSButton *diffButton;
 @property (nonatomic, strong) NSButton *liveButton;
 @property (nonatomic, assign) BOOL isDiffActive;
@@ -28,15 +35,12 @@
 }
 
 - (void)setupUIComponents {
-    // Pulsante Prev
     _prevButton = [NSButton buttonWithTitle:@"◀" target:self action:@selector(onPrevPressed:)];
     _prevButton.bezelStyle = NSBezelStyleInline;
     
-    // Pulsante Next
     _nextButton = [NSButton buttonWithTitle:@"▶" target:self action:@selector(onNextPressed:)];
     _nextButton.bezelStyle = NSBezelStyleInline;
     
-    // Timeline Slider
     _slider = [[NSSlider alloc] init];
     _slider.minValue = 0;
     _slider.maxValue = 1;
@@ -44,28 +48,58 @@
     _slider.target = self;
     _slider.action = @selector(onSliderChanged:);
     
-    // Info Label (Es: "14:28:12 (#12/50)")
     _infoLabel = [NSTextField labelWithString:@"--:--:-- (#0/0)"];
     _infoLabel.font = [NSFont monospacedSystemFontOfSize:11 weight:NSFontWeightMedium];
     _infoLabel.alignment = NSTextAlignmentCenter;
+
+    // --- PIN GROUP / BOOKMARK ---
+    _prevPinButton = [NSButton buttonWithTitle:@"⏮" target:self action:@selector(onPrevPinPressed:)];
+    _prevPinButton.bezelStyle = NSBezelStyleInline;
+    _prevPinButton.toolTip = @"Jump to Previous PIN";
+
+    _pinButton = [NSButton buttonWithTitle:@"📌 PIN" target:self action:@selector(onPinPressed:)];
+    [_pinButton setButtonType:NSButtonTypePushOnPushOff];
+    _pinButton.bezelStyle = NSBezelStyleInline;
+    _pinButton.showsBorderOnlyWhileMouseInside = NO;
+    _pinButton.toolTip = @"Toggle PIN (Bookmark Current Frame)";
+
+    _nextPinButton = [NSButton buttonWithTitle:@"⏭" target:self action:@selector(onNextPinPressed:)];
+    _nextPinButton.bezelStyle = NSBezelStyleInline;
+    _nextPinButton.toolTip = @"Jump to Next PIN";
+
+    // --- SEARCH BAR ---
+    _searchField = [[NSSearchField alloc] init];
+    _searchField.placeholderString = @"Search...";
+    _searchField.delegate = self;
+    _searchField.controlSize = NSControlSizeSmall;
     
-    // Toggle DIFF
     _diffButton = [NSButton buttonWithTitle:@"DIFF" target:self action:@selector(onDiffToggled:)];
     [_diffButton setButtonType:NSButtonTypeToggle];
     _diffButton.bezelStyle = NSBezelStyleInline;
     
-    // Pulsante LIVE
-    _liveButton = [NSButton buttonWithTitle:@"LIVE 🔴" target:self action:@selector(onLivePressed:)];
+    _liveButton = [NSButton buttonWithTitle:@"LIVE ⏏" target:self action:@selector(onLivePressed:)];
     _liveButton.bezelStyle = NSBezelStyleInline;
     
-    // Layout orizzontale
-    NSStackView *stack = [NSStackView stackViewWithViews:@[_prevButton, _nextButton, _slider, _infoLabel, _diffButton, _liveButton]];
+    // Add all components to the stack view
+    NSStackView *stack = [NSStackView stackViewWithViews:@[
+        _prevButton, 
+        _nextButton, 
+        _slider, 
+        _infoLabel,
+        _prevPinButton, 
+        _pinButton, 
+        _nextPinButton, 
+        _searchField, 
+        _diffButton, 
+        _liveButton
+    ]];
+    
     stack.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     stack.alignment = NSLayoutAttributeHeight;
-    stack.spacing = 10;
-    stack.edgeInsets = NSEdgeInsetsMake(6, 12, 6, 12);
-    
+    stack.spacing = 8; // Slightly reduced spacing from 10 to 8
+    stack.edgeInsets = NSEdgeInsetsMake(6, 10, 6, 10);
     stack.translatesAutoresizingMaskIntoConstraints = NO;
+    
     [self addSubview:stack];
     
     [NSLayoutConstraint activateConstraints:@[
@@ -73,8 +107,43 @@
         [stack.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
         [stack.topAnchor constraintEqualToAnchor:self.topAnchor],
         [stack.bottomAnchor constraintEqualToAnchor:self.bottomAnchor],
-        [_slider.widthAnchor constraintGreaterThanOrEqualToConstant:180]
+        [_slider.widthAnchor constraintGreaterThanOrEqualToConstant:120],
+        [_searchField.widthAnchor constraintEqualToConstant:100] // Compattato a 100 per far spazio ai PIN
     ]];
+}
+
+- (BOOL)control:(NSControl *)control textView:(NSTextView *)textView doCommandBySelector:(SEL)commandSelector {
+    if (control == self.searchField) {
+        if (commandSelector == @selector(insertNewline:)) { // È stato premuto Invio
+            // Search history based on the current input and direction
+            // With Shift+Invio search forwards in history
+            BOOL shiftPressed = ([NSEvent modifierFlags] & NSEventModifierFlagShift) != 0;
+            BOOL searchBackwards = !shiftPressed;
+            
+            [self.delegate timeMachineDidRequestSearch:self.searchField.stringValue searchBackward:searchBackwards];
+            return YES; // Avoids the standard system "beep"
+        }
+    }
+    return NO;
+}
+
+
+- (void)onPinPressed:(id)sender {
+    if ([self.delegate respondsToSelector:@selector(timeMachineDidTogglePin)]) {
+        [self.delegate timeMachineDidTogglePin];
+    }
+}
+
+- (void)onPrevPinPressed:(id)sender {
+    if ([self.delegate respondsToSelector:@selector(timeMachineDidRequestJumpToNextPin:)]) {
+        [self.delegate timeMachineDidRequestJumpToNextPin:NO];
+    }
+}
+
+- (void)onNextPinPressed:(id)sender {
+    if ([self.delegate respondsToSelector:@selector(timeMachineDidRequestJumpToNextPin:)]) {
+        [self.delegate timeMachineDidRequestJumpToNextPin:YES];
+    }
 }
 
 - (void)updateWithSnapshotsCount:(NSInteger)count currentIndex:(NSInteger)index timestamp:(NSTimeInterval)timestamp {
@@ -87,7 +156,29 @@
     fmt.dateFormat = @"HH:mm:ss";
     NSString *timeStr = [fmt stringFromDate:[NSDate dateWithTimeIntervalSince1970:timestamp]];
     
-    self.infoLabel.stringValue = [NSString stringWithFormat:@"%@ (#%ld/%ld)", timeStr, (long)(index + 1), (long)count];
+    NSInteger baselineIdx = [TimeMachineManager sharedManager].baselinePinIndex;
+    
+    if (self.isDiffActive) {
+        if (baselineIdx >= 0) {
+            // Mostra il confronto esplicito tra il frame corrente e il PIN impostato come baseline
+            self.infoLabel.stringValue = [NSString stringWithFormat:@"%@ (DIFF #%ld vs 📍PIN #%ld)", timeStr, (long)(index + 1), (long)(baselineIdx + 1)];
+        } else if (index > 0) {
+            self.infoLabel.stringValue = [NSString stringWithFormat:@"%@ (DIFF #%ld vs #%ld)", timeStr, (long)(index + 1), (long)index];
+        }
+        self.infoLabel.textColor = [NSColor systemOrangeColor];
+    } else {
+        self.infoLabel.stringValue = [NSString stringWithFormat:@"%@ (#%ld/%ld)", timeStr, (long)(index + 1), (long)count];
+        self.infoLabel.textColor = [NSColor labelColor];
+    }
+
+    BOOL isPinned = [[TimeMachineManager sharedManager] isPinnedAtIndex:index];
+    if (isPinned) {
+        self.pinButton.state = NSControlStateValueOn;
+        self.pinButton.title = @"📍 PINNED";
+    } else {
+        self.pinButton.state = NSControlStateValueOff;
+        self.pinButton.title = @"📌 PIN";
+    }
 }
 
 - (void)onSliderChanged:(NSSlider *)sender {

@@ -423,9 +423,19 @@ static NSColor *colorFor5250Attr(uint8_t attr) {
         const uint32_t *attrs = (const uint32_t *)snap.attributeBuffer.bytes;
 
         NSArray<NSNumber *> *diffMap = nil;
-        if (self.isDiffActive && self.currentTimeMachineIndex > 0) {
-            ScreenSnapshot *prevSnap = [[TimeMachineManager sharedManager] snapshotAtIndex:self.currentTimeMachineIndex - 1];
-            diffMap = [[TimeMachineManager sharedManager] compareSnapshot:snap withSnapshot:prevSnap];
+        if (self.isDiffActive) {
+            NSInteger baselineIdx = [TimeMachineManager sharedManager].baselinePinIndex;
+            
+            // If there is a Baseline (Pin) set and it is valid, compare with it!
+            if (baselineIdx >= 0 && baselineIdx < (NSInteger)[[TimeMachineManager sharedManager] allSnapshots].count) {
+                ScreenSnapshot *baseSnap = [[TimeMachineManager sharedManager] snapshotAtIndex:baselineIdx];
+                diffMap = [[TimeMachineManager sharedManager] compareSnapshot:snap withSnapshot:baseSnap];
+            } 
+            // Standard fallback: compare with the immediately preceding frame (N vs N-1)
+            else if (self.currentTimeMachineIndex > 0) {
+                ScreenSnapshot *prevSnap = [[TimeMachineManager sharedManager] snapshotAtIndex:self.currentTimeMachineIndex - 1];
+                diffMap = [[TimeMachineManager sharedManager] compareSnapshot:snap withSnapshot:prevSnap];
+            }
         }
 
         for (int row = 0; row < snap.rows; ++row) {
@@ -1855,7 +1865,6 @@ static constexpr CGFloat kGocaCellH = 12.0; // must match AH in buildQueryReply(
                      ? [[NSUserDefaults standardUserDefaults] boolForKey:@"DX3270_EnableTimeMachine"] 
                      : YES;
 
-    // Se disabilitata e non è già attiva, emette un segnale acustico e ignora il comando
     if (!tmEnabled && !self.isTimeMachineActive) {
         NSBeep();
         return;
@@ -1872,8 +1881,9 @@ static constexpr CGFloat kGocaCellH = 12.0; // must match AH in buildQueryReply(
 
         if (!self.timeMachineHUD) {
             self.timeMachineHUD = [[TimeMachineHUDView alloc] initWithFrame:NSZeroRect];
-            self.timeMachineHUD.delegate = self;
         }
+        
+        self.timeMachineHUD.delegate = self;
 
         [self.timeMachineHUD showInParentView:self];
         [self updateHUDState];
@@ -1891,7 +1901,73 @@ static constexpr CGFloat kGocaCellH = 12.0; // must match AH in buildQueryReply(
                                        timestamp:currentSnap.timestamp];
 }
 
+
+#pragma mark - TimeMachineHUDDelegate Implementation (PIN / POI Navigation)
+
+- (void)timeMachineDidTogglePin {
+    [[TimeMachineManager sharedManager] togglePinAtIndex:self.currentTimeMachineIndex];
+    [self updateHUDState]; // Force HUD to refresh and reflect the new pin state
+}
+
+- (void)timeMachineDidRequestJumpToNextPin:(BOOL)forward {
+    NSInteger targetIndex = -1;
+    if (forward) {
+        targetIndex = [[TimeMachineManager sharedManager] nextPinnedIndexAfter:self.currentTimeMachineIndex];
+    } else {
+        targetIndex = [[TimeMachineManager sharedManager] prevPinnedIndexBefore:self.currentTimeMachineIndex];
+    }
+    
+    if (targetIndex != -1) {
+        self.currentTimeMachineIndex = targetIndex;
+        [self updateHUDState];
+        [self setNeedsDisplay:YES];
+    } else {
+        NSBeep(); // No other PIN available in that direction
+    }
+}
+
+
 #pragma mark - TimeMachineHUDDelegate Implementation
+
+- (void)timeMachineDidRequestSearch:(NSString *)query searchBackward:(BOOL)backward {
+    if (query.length == 0) return;
+    
+    NSArray *snaps = [[TimeMachineManager sharedManager] allSnapshots];
+    if (snaps.count == 0) return;
+    
+    // Decide the direction of iteration
+    NSInteger step = backward ? -1 : 1;
+    NSInteger startIdx = self.currentTimeMachineIndex + step;
+    
+    BOOL matchFound = NO;
+    
+    // Iterate over the time frames
+    for (NSInteger i = startIdx; i >= 0 && i < (NSInteger)snaps.count; i += step) {
+        ScreenSnapshot *snap = snaps[i];
+        
+        // Extract the character buffer in one go
+        const unichar *chars = (const unichar *)snap.characterBuffer.bytes;
+        int totalCells = snap.rows * snap.cols;
+        
+        // Convert the raw buffer into an NSString to leverage macOS's fast search
+        NSString *screenText = [[NSString alloc] initWithCharacters:chars length:totalCells];
+        
+        // Case-insensitive search
+        if ([screenText localizedCaseInsensitiveContainsString:query]) {
+            self.currentTimeMachineIndex = i;
+            [self updateHUDState];
+            [self setNeedsDisplay:YES];
+            matchFound = YES;
+            break;
+        }
+    }
+    
+    // If the string is not found, beep to alert the user
+    if (!matchFound) {
+        NSBeep();
+    }
+}
+
 
 - (void)timeMachineDidSelectSnapshotAtIndex:(NSInteger)index {
     self.currentTimeMachineIndex = index;
@@ -1901,6 +1977,18 @@ static constexpr CGFloat kGocaCellH = 12.0; // must match AH in buildQueryReply(
 
 - (void)timeMachineDidToggleDiffMode:(BOOL)diffEnabled {
     self.isDiffActive = diffEnabled;
+    
+    if (diffEnabled) {
+        // If the current frame is a PIN, use it as the fixed Baseline for future comparisons
+        if ([[TimeMachineManager sharedManager] isPinnedAtIndex:self.currentTimeMachineIndex]) {
+            [TimeMachineManager sharedManager].baselinePinIndex = self.currentTimeMachineIndex;
+        }
+    } else {
+        // Reset the baseline when DIFF is deactivated
+        [TimeMachineManager sharedManager].baselinePinIndex = -1;
+    }
+    
+    [self updateHUDState];
     [self setNeedsDisplay:YES];
 }
 
