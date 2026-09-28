@@ -450,6 +450,8 @@ static NSColor *colorFor5250Attr(uint8_t attr) {
 
                 // Native Color for the 3270 screen
                 NSColor *nativeFg = _foregroundColor;
+                NSColor *bg = _backgroundColor;
+
                 if (attrs) {
                     uint32_t packed = attrs[pos];
                     uint8_t colorType = (packed >> 16) & 0xFF;
@@ -469,41 +471,35 @@ static NSColor *colorFor5250Attr(uint8_t attr) {
                     }
                 }
 
-                // Diff highlighting: Dark Amber Background + Golden Yellow Text
+                // Diff highlighting: Dark Amber Background
                 if (isModified) {
-                    [[NSColor colorWithCalibratedRed:0.45 green:0.20 blue:0.00 alpha:0.65] setFill];
+                    bg = [NSColor colorWithCalibratedRed:0.45 green:0.20 blue:0.00 alpha:0.65];
+                }
+
+                // Historical Screen Text Selection Overlay
+                BOOL isSelected = NO;
+                if (_selStart != -1 && _selEnd != -1) {
+                    int r1 = _selStart / snap.cols, c1 = _selStart % snap.cols;
+                    int r2 = _selEnd / snap.cols,   c2 = _selEnd % snap.cols;
+                    int minRow = MIN(r1, r2), maxRow = MAX(r1, r2);
+                    int minCol = MIN(c1, c2), maxCol = MAX(c1, c2);
+                    
+                    if (row >= minRow && row <= maxRow && col >= minCol && col <= maxCol) {
+                        isSelected = YES;
+                        bg = [NSColor selectedTextBackgroundColor];
+                        nativeFg = [NSColor selectedTextColor];
+                    }
+                }
+
+                // Render background if not standard black
+                if (bg != _backgroundColor) {
+                    [bg setFill];
                     NSRectFill(NSMakeRect(cx, cy, _charW, _charH));
-                }
-
-// Overlay Selezione Testo Storico
-                if (_selStart != -1 && _selEnd != -1) {
-                    int r1 = _selStart / snap.cols, c1 = _selStart % snap.cols;
-                    int r2 = _selEnd / snap.cols, c2 = _selEnd % snap.cols;
-                    int minRow = MIN(r1, r2), maxRow = MAX(r1, r2);
-                    int minCol = MIN(c1, c2), maxCol = MAX(c1, c2);
-                    
-                    if (row >= minRow && row <= maxRow && col >= minCol && col <= maxCol) {
-                        [[NSColor selectedTextBackgroundColor] setFill];
-                        NSRectFillUsingOperation(NSMakeRect(cx, cy, _charW, _charH), NSCompositingOperationSourceOver);
-                    }
-                }
-
-                // Overlay selection for live mode
-                if (_selStart != -1 && _selEnd != -1) {
-                    int r1 = _selStart / snap.cols, c1 = _selStart % snap.cols;
-                    int r2 = _selEnd / snap.cols, c2 = _selEnd % snap.cols;
-                    int minRow = MIN(r1, r2), maxRow = MAX(r1, r2);
-                    int minCol = MIN(c1, c2), maxCol = MAX(c1, c2);
-                    
-                    if (row >= minRow && row <= maxRow && col >= minCol && col <= maxCol) {
-                        [[NSColor selectedTextBackgroundColor] setFill];
-                        NSRectFillUsingOperation(NSMakeRect(cx, cy, _charW, _charH), NSCompositingOperationSourceOver);
-                    }
                 }
 
                 if (uc > 0x20) {
                     NSString *ch = [NSString stringWithCharacters:&uc length:1];
-                    NSColor *textColor = isModified ? [NSColor colorWithCalibratedRed:1.0 green:0.92 blue:0.30 alpha:1.0] : nativeFg;
+                    NSColor *textColor = (isModified && !isSelected) ? [NSColor colorWithCalibratedRed:1.0 green:0.92 blue:0.30 alpha:1.0] : nativeFg;
                     NSDictionary *charAttrs = @{
                         NSFontAttributeName: _terminalFont,
                         NSForegroundColorAttributeName: textColor,
@@ -517,6 +513,7 @@ static NSColor *colorFor5250Attr(uint8_t attr) {
         [NSGraphicsContext restoreGraphicsState];
         return;
     }
+
     // --- LIVE STANDARD MODE ---
     [_backgroundColor setFill];
     NSRectFill(self.bounds);
@@ -587,9 +584,6 @@ static NSColor *colorFor5250Attr(uint8_t attr) {
                 fg = colorFor5250Attr(dispAttr);
                 is5250Reverse   = (mod5250 & X5250ModReverse)   != 0;
                 is5250Underline = (mod5250 & X5250ModUnderline) != 0;
-            } else if (cell.fgColor != 0x00) {
-                // 3270 Extended Color
-                fg = colorFor3270Code(cell.fgColor) ?: _foregroundColor;
             } else if (cell.fgColor != 0x00) {
                 // 3270 Extended Color
                 fg = colorFor3270Code(cell.fgColor) ?: _foregroundColor;
@@ -757,6 +751,7 @@ static NSColor *colorFor5250Attr(uint8_t attr) {
     // Restore the graphics context at the end of the method
     [NSGraphicsContext restoreGraphicsState];
 }
+
 // ── GOCA Graphics Overlay ─────────────────────────────────────────────────────
 static constexpr CGFloat kGocaCellW = 9.0;  // must match AW in buildQueryReply()
 static constexpr CGFloat kGocaCellH = 12.0; // must match AH in buildQueryReply()
@@ -963,6 +958,24 @@ static constexpr CGFloat kGocaCellH = 12.0; // must match AH in buildQueryReply(
                   ? [event.charactersIgnoringModifiers characterAtIndex:0] : 0;
     BOOL shiftDown = (modifiers & NSEventModifierFlagShift) != 0;
 
+    // ⌘ + B — Toggle Bookmark / PIN in Time-Machine
+    if ((modifiers & NSEventModifierFlagCommand) &&
+        !(modifiers & (NSEventModifierFlagOption | NSEventModifierFlagControl | NSEventModifierFlagShift)) &&
+        (key == 'b' || key == 'B')) {
+        if (self.isTimeMachineActive) {
+            [[TimeMachineManager sharedManager] togglePinAtIndex:self.currentTimeMachineIndex];
+            [self updateHUDState];
+        } else {
+            [self captureCurrentScreenSnapshot];
+            NSArray *snaps = [[TimeMachineManager sharedManager] allSnapshots];
+            if (snaps.count > 0) {
+                [[TimeMachineManager sharedManager] togglePinAtIndex:(snaps.count - 1)];
+                NSBeep();
+            }
+        }
+        return YES;
+    }
+
     // ⌘ + ⇧ + L — Toggle Smart Log Isolator
     if ((modifiers & NSEventModifierFlagCommand) &&
         (modifiers & NSEventModifierFlagShift) &&
@@ -1152,8 +1165,6 @@ static constexpr CGFloat kGocaCellH = 12.0; // must match AH in buildQueryReply(
 // ── Mouse handling ────────────────────────────────────────────────────────────
 
 - (int)offsetForPoint:(NSPoint)pt {
-    if (!_screen) return -1;
-    
     NSSize pref = [self preferredSize];
     CGFloat scaleX = self.bounds.size.width / pref.width;
     CGFloat scaleY = self.bounds.size.height / pref.height;
@@ -1172,7 +1183,7 @@ static constexpr CGFloat kGocaCellH = 12.0; // must match AH in buildQueryReply(
 }
 
 - (void)mouseDown:(NSEvent *)event {
-    // If the Time Machine is active and the click is on the HUD, let the HUD handle it
+    // 1. Pass mouse clicks over the HUD back to AppKit
     if (self.isTimeMachineActive && self.timeMachineHUD) {
         NSPoint locationInSelf = [self convertPoint:[event locationInWindow] fromView:nil];
         if (NSPointInRect(locationInSelf, self.timeMachineHUD.frame)) {
@@ -1181,14 +1192,13 @@ static constexpr CGFloat kGocaCellH = 12.0; // must match AH in buildQueryReply(
         }
     }
 
-    // Option + Shift + Click = Instantly set the isolation filter on the clicked word
-    if (([event modifierFlags] & NSEventModifierFlagOption) && ([event modifierFlags] & NSEventModifierFlagShift)) {        NSPoint pt = [self convertPoint:[event locationInWindow] fromView:nil];
+    // 2. Option + Shift + Click = Isolation Filter
+    if (([event modifierFlags] & NSEventModifierFlagOption) && ([event modifierFlags] & NSEventModifierFlagShift)) {
+        NSPoint pt = [self convertPoint:[event locationInWindow] fromView:nil];
         int offset = [self offsetForPoint:pt];
         if (offset >= 0 && _screen) {
             int row = offset / _cols;
             int col = offset % _cols;
-            
-            // Extract the word (Jobname, ASID, error code) under the cursor
             int startCol = col, endCol = col;
             while (startCol > 0 && _screen->at(row * _cols + (startCol - 1)).ch > 0x40) startCol--;
             while (endCol < _cols - 1 && _screen->at(row * _cols + (endCol + 1)).ch > 0x40) endCol++;
@@ -1208,38 +1218,33 @@ static constexpr CGFloat kGocaCellH = 12.0; // must match AH in buildQueryReply(
         return;
     }
     
-    if (!_screen) return;
-    
     NSPoint pt = [self convertPoint:[event locationInWindow] fromView:nil];
     int offset = [self offsetForPoint:pt];
     
-    // --- NEW: Intercept Option + Click for Data Inspector ---
-    if (([event modifierFlags] & NSEventModifierFlagOption) != 0) {
+    // 3. Option + Click = Data Inspector
+    if (([event modifierFlags] & NSEventModifierFlagOption) != 0 && !self.isTimeMachineActive) {
         if (offset >= 0) {
-            // Check if we are clicking INSIDE an active text selection
             BOOL insideSelection = (_selStart >= 0 && _selEnd >= _selStart && offset >= _selStart && offset <= _selEnd);
-            
-            // If not inside a selection, collapse it to a single character click
             if (!insideSelection) {
-                _screen->setCursor(offset);
+                if (_screen) _screen->setCursor(offset);
                 _selStart = offset;
                 _selEnd = offset;
                 [self setNeedsDisplay:YES];
             }
-            
             [self showDataInspectorAtOffset:offset event:event];
         }
-        return; // Consume the event
+        return;
     }
-    // --------------------------------------------------------
 
+    // 4. Standard mouse text selection tracking (both LIVE and Time-Machine)
     if (offset >= 0) {
-        _screen->setCursor(offset);
+        if (!self.isTimeMachineActive && _screen) {
+            _screen->setCursor(offset);
+        }
         _selStart = offset;
         _selEnd = offset;
         [self setNeedsDisplay:YES];
     } else {
-        // Clicked outside bounds (e.g., OIA), clear selection
         _selStart = -1;
         _selEnd = -1;
         [self setNeedsDisplay:YES];
@@ -1491,7 +1496,6 @@ static constexpr CGFloat kGocaCellH = 12.0; // must match AH in buildQueryReply(
     }
 }
 
-
 - (void)executePointerJump:(NSButton *)sender {
     NSString *cmd = [NSString stringWithFormat:@"L %@", sender.identifier];
     NSWindowController *wc = self.window.windowController;
@@ -1502,7 +1506,7 @@ static constexpr CGFloat kGocaCellH = 12.0; // must match AH in buildQueryReply(
 }
 
 - (void)mouseDragged:(NSEvent *)event {
-    if (!_screen || _selStart == -1) return;
+    if (_selStart == -1) return;
     
     NSPoint pt = [self convertPoint:[event locationInWindow] fromView:nil];
     int offset = [self offsetForPoint:pt];
@@ -1514,14 +1518,12 @@ static constexpr CGFloat kGocaCellH = 12.0; // must match AH in buildQueryReply(
 }
 
 - (void)mouseUp:(NSEvent *)event {
-    if (!_screen) return;
-
-    // ── 1. Double-Click Handler ──────────────────────────────────────────────
+    // ── Double-Click Handler ──────────────────────────────────────────────
     if (event.clickCount == 2) {
         NSPoint pt = [self convertPoint:[event locationInWindow] fromView:nil];
         int offset = [self offsetForPoint:pt];
         
-        if (offset >= 0) {
+        if (offset >= 0 && _screen) {
             int row = offset / _cols;
             int col = offset % _cols;
             
@@ -1648,14 +1650,6 @@ static constexpr CGFloat kGocaCellH = 12.0; // must match AH in buildQueryReply(
         }
         return;
     }
-
-    // ── 2. Single-Click Handler ──────────────────────────────────────────────
-    // Clear active selection range if user clicked without dragging
-    if (_selStart == _selEnd) {
-        _selStart = -1;
-        _selEnd = -1;
-        [self setNeedsDisplay:YES];
-    }
 }
 
 // ── Clipboard (Copy / Paste) ──────────────────────────────────────────────────
@@ -1680,7 +1674,9 @@ static constexpr CGFloat kGocaCellH = 12.0; // must match AH in buildQueryReply(
         return;
     }
     
-    int cols = self.isTimeMachineActive ? _cols : (_screen ? _screen->cols() : _cols);
+    int cols = _cols;
+    if (cols <= 0) cols = 80;
+
     int r1 = _selStart / cols;
     int c1 = _selStart % cols;
     int r2 = _selEnd / cols;
@@ -1694,7 +1690,7 @@ static constexpr CGFloat kGocaCellH = 12.0; // must match AH in buildQueryReply(
     NSMutableString *copiedText = [NSMutableString string];
     
     if (self.isTimeMachineActive) {
-        // --- Extraction from TIME MACHINE ---
+        // Extract selected text block from Time-Machine screen snapshot
         ScreenSnapshot *snap = [[TimeMachineManager sharedManager] snapshotAtIndex:self.currentTimeMachineIndex];
         if (!snap) return;
         const unichar *chars = (const unichar *)snap.characterBuffer.bytes;
@@ -1704,17 +1700,13 @@ static constexpr CGFloat kGocaCellH = 12.0; // must match AH in buildQueryReply(
             for (int c = minCol; c <= maxCol; ++c) {
                 int pos = r * snap.cols + c;
                 unichar uc = chars[pos];
-                if (uc >= 0x20) {
-                    [rowText appendFormat:@"%C", uc];
-                } else {
-                    [rowText appendString:@" "];
-                }
+                [rowText appendFormat:@"%C", (unichar)((uc >= 0x20) ? uc : ' ')];
             }
             [copiedText appendString:rowText];
             if (r < maxRow) [copiedText appendString:@"\n"];
         }
     } else {
-        // --- Extraction from LIVE SCREEN ---
+        // Extract selected text block from live screen buffer
         if (!_screen) return;
         for (int r = minRow; r <= maxRow; ++r) {
             NSMutableString *rowText = [NSMutableString string];
@@ -1725,11 +1717,7 @@ static constexpr CGFloat kGocaCellH = 12.0; // must match AH in buildQueryReply(
                     [rowText appendString:@" "];
                 } else {
                     uint16_t uc = _codec.toUnicode(cell.ch);
-                    if (uc >= 0x20) {
-                        [rowText appendFormat:@"%C", (unichar)uc];
-                    } else {
-                        [rowText appendString:@" "];
-                    }
+                    [rowText appendFormat:@"%C", (unichar)((uc >= 0x20) ? uc : ' ')];
                 }
             }
             [copiedText appendString:rowText];
@@ -1742,11 +1730,69 @@ static constexpr CGFloat kGocaCellH = 12.0; // must match AH in buildQueryReply(
     [pb setString:copiedText forType:NSPasteboardTypeString];
 }
 
+- (void)paste:(id)sender {
+    if (!_kbd && !_kbd5250) return;
+    
+    NSPasteboard *pb = [NSPasteboard generalPasteboard];
+    NSString *text = [pb stringForType:NSPasteboardTypeString];
+    
+    if (!text || text.length == 0) {
+        NSBeep();
+        return;
+    }
+    
+    // Memorize the exact column where the user starts pasting
+    int startCol = 0;
+    if (_screen) {
+        startCol = _screen->cursorPos() % _cols;
+    }
+    
+    for (NSUInteger i = 0; i < text.length; i++) {
+        unichar c = [text characterAtIndex:i];
+        
+        // Ignore completely the 'Carriage Return' (\r) to avoid double newlines
+        // (Windows texts with \r\n will become simple \n)
+        if (c == '\r') {
+            continue;
+        }
+        
+        BOOL success = NO;
+        
+        if (c == '\n') {
+            // Paste in Block Mode: move down one row and align precisely to the starting column, 
+            // ignoring ISPF row numbers.
+            if (_screen) {
+                int curRow = _screen->cursorPos() / _cols;
+                int nextRow = curRow + 1;
+                
+                if (nextRow < _rows) {
+                    _screen->setCursor(nextRow * _cols + startCol);
+                    success = YES;
+                } else {
+                    success = NO; // Reached the bottom of the screen
+                }
+            }
+        } else {
+            // Digit the EBCDIC character normally
+            uint8_t ebcdic = [self ebcdicForUnichar:c];
+            if (_kbd) success = _kbd->handleEbcdicChar(ebcdic);
+            else if (_kbd5250) success = _kbd5250->handleEbcdicChar(ebcdic);
+        }
+        
+        // Stop the paste (and emit a beep) if we hit a protected field or the end of the screen
+        if (!success) {
+            NSBeep();
+            break;
+        }
+    }
+    
+    [self setNeedsDisplay:YES];
+}
+
 - (void)toggleCrosshairRuler {
     self.showCrosshairRuler = !self.showCrosshairRuler;
     [self setNeedsDisplay:YES];
 }
-
 
 - (void)toggleLogIsolatorMode {
     using namespace dx3270;
@@ -1894,12 +1940,11 @@ static constexpr CGFloat kGocaCellH = 12.0; // must match AH in buildQueryReply(
                                        timestamp:currentSnap.timestamp];
 }
 
-
 #pragma mark - TimeMachineHUDDelegate Implementation (PIN / POI Navigation)
 
 - (void)timeMachineDidTogglePin {
     [[TimeMachineManager sharedManager] togglePinAtIndex:self.currentTimeMachineIndex];
-    [self updateHUDState]; // Force HUD to refresh and reflect the new pin state
+    [self updateHUDState]; // Refresh HUD state to display active pin indicator
 }
 
 - (void)timeMachineDidRequestJumpToNextPin:(BOOL)forward {
@@ -1915,10 +1960,9 @@ static constexpr CGFloat kGocaCellH = 12.0; // must match AH in buildQueryReply(
         [self updateHUDState];
         [self setNeedsDisplay:YES];
     } else {
-        NSBeep(); // No other PIN available in that direction
+        NSBeep(); // Boundary reached in POI history
     }
 }
-
 
 #pragma mark - TimeMachineHUDDelegate Implementation
 
@@ -1961,7 +2005,6 @@ static constexpr CGFloat kGocaCellH = 12.0; // must match AH in buildQueryReply(
     }
 }
 
-
 - (void)timeMachineDidSelectSnapshotAtIndex:(NSInteger)index {
     self.currentTimeMachineIndex = index;
     [self updateHUDState];
@@ -1972,12 +2015,12 @@ static constexpr CGFloat kGocaCellH = 12.0; // must match AH in buildQueryReply(
     self.isDiffActive = diffEnabled;
     
     if (diffEnabled) {
-        // If the current frame is a PIN, use it as the fixed Baseline for future comparisons
+        // Set active frame as baseline anchor if it is pinned
         if ([[TimeMachineManager sharedManager] isPinnedAtIndex:self.currentTimeMachineIndex]) {
             [TimeMachineManager sharedManager].baselinePinIndex = self.currentTimeMachineIndex;
         }
     } else {
-        // Reset the baseline when DIFF is deactivated
+        // Reset baseline when disabling diff mode
         [TimeMachineManager sharedManager].baselinePinIndex = -1;
     }
     
