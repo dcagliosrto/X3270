@@ -1,0 +1,40 @@
+#pragma once
+
+#include <QWidget>
+#include <QComboBox>
+#include <QLineEdit>
+#include <QPushButton>
+#include <QHBoxLayout>
+#include <QCompleter>
+
+class CommandDockWidget : public QWidget {
+    Q_OBJECT
+
+public:
+    explicit CommandDockWidget(QWidget *parent = nullptr);
+    void setLinkGroup(const QString &group) { m_linkGroup = group; }
+    QString linkGroup() const { return m_linkGroup; }
+
+signals:
+    void ispfCommandRequested(const QString &cmd, const QString &group);
+    void oobCommandRequested(const QString &cmd, const QString &group);
+    void toggleRulerRequested();
+    void toggleTimeMachineRequested();
+
+private slots:
+    void onIspfButtonClicked();
+    void onIspfReturnPressed();
+    void onOobReturnPressed();
+
+private:
+    void setupUi();
+    void loadFastPaths();
+
+    QComboBox *m_linkGroupCombo;
+    QHBoxLayout *m_fastPathsLayout;
+    QLineEdit *m_ispfField;
+    QLineEdit *m_oobField;
+    QPushButton *m_rulerBtn;
+    QPushButton *m_timeMachineBtn;
+    QString m_linkGroup;
+};
