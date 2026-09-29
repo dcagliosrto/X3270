@@ -8,6 +8,8 @@
 - (void)timeMachineDidRequestSearch:(NSString *)query searchBackward:(BOOL)backward;
 - (void)timeMachineDidTogglePin;
 - (void)timeMachineDidRequestJumpToNextPin:(BOOL)forward;
+- (void)timeMachineDidRequestExport;
+- (void)timeMachineDidRequestImport;
 @end
 
 @interface TimeMachineHUDView : NSVisualEffectView

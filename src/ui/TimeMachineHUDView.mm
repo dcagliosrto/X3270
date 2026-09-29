@@ -11,6 +11,10 @@
 @property (nonatomic, strong) NSButton *pinButton;
 @property (nonatomic, strong) NSButton *nextPinButton;
 
+// --- EXPORT & IMPORT BUTTONS ---
+@property (nonatomic, strong) NSButton *exportBtn;
+@property (nonatomic, strong) NSButton *importBtn;
+
 @property (nonatomic, strong) NSSearchField *searchField;
 @property (nonatomic, strong) NSButton *diffButton;
 @property (nonatomic, strong) NSButton *liveButton;
@@ -67,6 +71,16 @@
     _nextPinButton.bezelStyle = NSBezelStyleInline;
     _nextPinButton.toolTip = @"Jump to Next PIN";
 
+
+    // --- EXPORT & IMPORT ---
+    _exportBtn = [NSButton buttonWithTitle:@"💾 Export" target:self action:@selector(onExportPressed:)];
+    _exportBtn.bezelStyle = NSBezelStyleInline;
+    _exportBtn.toolTip = @"Export Current Frame";
+
+    _importBtn = [NSButton buttonWithTitle:@"📂 Import" target:self action:@selector(onImportPressed:)];
+    _importBtn.bezelStyle = NSBezelStyleInline;
+    _importBtn.toolTip = @"Import Current Frame";
+
     // --- SEARCH BAR ---
     _searchField = [[NSSearchField alloc] init];
     _searchField.placeholderString = @"Search...";
@@ -89,6 +103,8 @@
         _prevPinButton, 
         _pinButton, 
         _nextPinButton, 
+        _exportBtn,
+        _importBtn,
         _searchField, 
         _diffButton, 
         _liveButton
@@ -143,6 +159,18 @@
 - (void)onNextPinPressed:(id)sender {
     if ([self.delegate respondsToSelector:@selector(timeMachineDidRequestJumpToNextPin:)]) {
         [self.delegate timeMachineDidRequestJumpToNextPin:YES];
+    }
+}
+
+- (void)onExportPressed:(id)sender {
+    if ([self.delegate respondsToSelector:@selector(timeMachineDidRequestExport)]) {
+        [self.delegate timeMachineDidRequestExport];
+    }
+}
+
+- (void)onImportPressed:(id)sender {
+    if ([self.delegate respondsToSelector:@selector(timeMachineDidRequestImport)]) {
+        [self.delegate timeMachineDidRequestImport];
     }
 }
 

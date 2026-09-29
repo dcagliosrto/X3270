@@ -567,48 +567,76 @@ static NSColor *colorFor5250Attr(uint8_t attr) {
             // Skip non-display (password) fields — draw nothing
             if (cell.isNonDisplay()) continue;
 
-            // ── Foreground colour ─────────────────────────────────────────────
-            NSColor *fg;
-            BOOL    is5250Reverse   = NO;
-            BOOL    is5250Underline = NO;
+            // ── UNIFIED COLOR ENGINE (TN3270 & TN5250) ───────────────────────
+            NSColor *fg = nil;
+            NSColor *bg = (cell.bgColor >= 0xF1 && cell.bgColor <= 0xF7)
+                ? (colorFor3270Code(cell.bgColor) ?: _backgroundColor)
+                : _backgroundColor;
+            
+            BOOL is5250Reverse   = NO;
+            BOOL is5250Underline = NO;
             
             if (_kbd5250 != nil) {
-                // 5250 mode
+                // 1. TN5250 EMULATOR COLOR LOGIC
                 int faIdx = _screen->findFieldStart(pos);
                 uint8_t dispAttr = (faIdx >= 0) ? _screen->at(faIdx).fgColor : 0x20;
                 if (dispAttr < 0x20 || dispAttr > 0x3F) dispAttr = 0x20;
+                
                 X5250Color base5250;
                 uint8_t    mod5250;
                 decode5250Attr(dispAttr, &base5250, &mod5250);
-                if (mod5250 & X5250ModNonDisp) continue;
+                
+                if (mod5250 & X5250ModNonDisp) continue; 
+                
                 fg = colorFor5250Attr(dispAttr);
                 is5250Reverse   = (mod5250 & X5250ModReverse)   != 0;
                 is5250Underline = (mod5250 & X5250ModUnderline) != 0;
-            } else if (cell.fgColor != 0x00) {
-                // 3270 Extended Color
-                fg = colorFor3270Code(cell.fgColor) ?: _foregroundColor;
+
             } else {
-                // 3270 Base Color - Dynamic calculation to prevent attribute bleed during scrolling
-                int faIdx = _screen->findFieldStart(pos);
-                uint8_t activeAttr = (faIdx >= 0) ? _screen->at(faIdx).attr : 0x00;
-                int colorIdx = ((activeAttr & 0x20) >> 4) | ((activeAttr & 0x08) >> 3);
+                // 2. TN3270 EMULATOR COLOR LOGIC
+                if (cell.fgColor >= 0xF1 && cell.fgColor <= 0xF7) {
+                    fg = colorFor3270Code(cell.fgColor);
+                }
                 
-                switch (colorIdx) {
-                case 1:  fg = _intensifiedColor; break;
-                case 2:  fg = [NSColor colorWithRed:0.22 green:0.52 blue:1.00 alpha:1.0]; break;
-                case 3:  fg = [NSColor colorWithRed:0.85 green:0.85 blue:0.85 alpha:1.0]; break;
-                default: fg = _foregroundColor; break;
+                if (!fg) {
+                    int faIdx = _screen->findFieldStart(pos);
+                    uint8_t activeAttr = 0x00;
+                    
+                    if (faIdx >= 0) {
+                        activeAttr = _screen->at(faIdx).attr;
+                    } else {
+                        activeAttr = cell.attr;
+                    }
+                    
+                    BOOL isProtected   = (activeAttr & 0x20) != 0;
+                    BOOL isIntensified = (activeAttr & 0x08) != 0;
+                    
+                    // Determine foreground color based on protection and intensity
+                    if (isProtected) {
+                        if (isIntensified) {
+                            // Protected High-Intense (Titles ISPF/SDSF, CSR, status) -> WHITE
+                            fg = [NSColor colorWithRed:0.85 green:0.85 blue:0.85 alpha:1.0];
+                        } else {
+                            // Protected Normal (Header of column, static text) -> BLUE
+                            fg = [NSColor colorWithRed:0.22 green:0.52 blue:1.00 alpha:1.0];
+                        }
+                    } else {
+                        if (isIntensified) {
+                            // Unprotected High-Intense (Active input areas, Errors) -> RED
+                            fg = _intensifiedColor;
+                        } else {
+                            // Unprotected Normal (Standard data, JOB rows) -> GREEN
+                            fg = _foregroundColor;
+                        }
+                    }
                 }
             }
 
-            // ── Background colour ─────────────────────────────────────────────
-            NSColor *bg = (cell.bgColor != 0x00)
-                ? (colorFor3270Code(cell.bgColor) ?: _backgroundColor)
-                : _backgroundColor;
-
-            // ── Reverse-video highlight (0xF2) ────────────────────────────────
+            // ── Reverse Video Highlight (0xF2) ──────────────────────────────
             if (cell.highlight == 0xF2 || is5250Reverse) {
-                NSColor *tmp = fg; fg = bg; bg = tmp;
+                NSColor *tmp = fg;
+                fg = bg;
+                bg = tmp;
             }
 
             // ── Mouse Selection Overrides (Rectangular Selection) ─────────────
@@ -2186,6 +2214,93 @@ static constexpr CGFloat kGocaCellH = 12.0; // must match AH in buildQueryReply(
             self->_videoRecorder->appendFrame((void *)rep.CGImage);
         }
     });
+}
+
+#pragma mark - Time Machine Export & Import Actions
+
+- (IBAction)exportTimeMachineTrace:(id)sender {
+    NSArray *snaps = [[TimeMachineManager sharedManager] allSnapshots];
+    if (snaps.count == 0) {
+        NSBeep();
+        return;
+    }
+
+    NSSavePanel *panel = [NSSavePanel savePanel];
+    panel.title = @"Export Time-Machine Trace";
+
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    panel.allowedFileTypes = @[@"dxlog", @"pdf"];
+#pragma clang diagnostic pop
+
+    panel.nameFieldStringValue = [NSString stringWithFormat:@"DX3270_Trace_%ld.dxlog", (long)[[NSDate date] timeIntervalSince1970]];
+    
+    [panel beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse result) {
+        if (result == NSModalResponseOK && panel.URL) {
+            NSError *error = nil;
+            BOOL success = NO;
+            
+            if ([panel.URL.pathExtension isEqualToString:@"pdf"]) {
+                success = [[TimeMachineManager sharedManager] exportPDFReportToURL:panel.URL error:&error];
+            } else {
+                success = [[TimeMachineManager sharedManager] exportAuditTraceToURL:panel.URL error:&error];
+            }
+            
+            if (!success) {
+                NSAlert *alert = [NSAlert alertWithError:error];
+                [alert beginSheetModalForWindow:self.window completionHandler:nil];
+            }
+        }
+    }];
+}
+
+- (IBAction)importTimeMachineTrace:(id)sender {
+    NSOpenPanel *panel = [NSOpenPanel openPanel];
+    panel.title = @"Import Time-Machine Trace";
+
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    panel.allowedFileTypes = @[@"dxlog"];
+#pragma clang diagnostic pop
+
+    panel.canChooseDirectories = NO;
+    panel.allowsMultipleSelection = NO;
+    
+    [panel beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse result) {
+        if (result == NSModalResponseOK && panel.URL) {
+            NSError *error = nil;
+            BOOL success = [[TimeMachineManager sharedManager] importAuditTraceFromURL:panel.URL error:&error];
+            
+            if (success) {
+                NSArray *snaps = [[TimeMachineManager sharedManager] allSnapshots];
+                if (snaps.count > 0) {
+                    self.isTimeMachineActive = YES;
+                    self.currentTimeMachineIndex = snaps.count - 1;
+                    
+                    if (!self.timeMachineHUD) {
+                        self.timeMachineHUD = [[TimeMachineHUDView alloc] initWithFrame:NSZeroRect];
+                    }
+                    self.timeMachineHUD.delegate = self;
+                    [self.timeMachineHUD showInParentView:self];
+                    [self updateHUDState];
+                    [self setNeedsDisplay:YES];
+                }
+            } else {
+                NSAlert *alert = [NSAlert alertWithError:error];
+                [alert beginSheetModalForWindow:self.window completionHandler:nil];
+            }
+        }
+    }];
+}
+
+#pragma mark - TimeMachineHUDDelegate Export & Import Implementation
+
+- (void)timeMachineDidRequestExport {
+    [self exportTimeMachineTrace:nil];
+}
+
+- (void)timeMachineDidRequestImport {
+    [self importTimeMachineTrace:nil];
 }
 
 @end
