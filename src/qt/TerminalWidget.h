@@ -4,12 +4,15 @@
 #include <QPainter>
 #include <QTimer>
 #include <QKeyEvent>
+#include <QMouseEvent>
+#include <QResizeEvent>
 #include <QFont>
 #include <QColor>
 #include <QStringList>
 
 #include "TimeMachineHUDWidget.h"
 #include "TimeMachineManager.h"
+#include "DataInspectorDialog.h"
 
 #include "../core/ScreenBuffer.h"
 #include "../core/EbcdicCodec.h"
@@ -29,14 +32,24 @@ public:
     QColor getCellColor(bool isProtected, bool isIntensified);
     QColor colorFor3270Code(uint8_t code);
 
+    void setRulerVisible(bool visible);
     void toggleRuler();
+    bool isRulerVisible() const { return m_showRuler; }
+
     void toggleTimeMachine();
     void captureCurrentScreenSnapshot();
     bool isTimeMachineActive() const { return m_isTimeMachineActive; }
 
+    void copyToClipboard();
+    void pasteFromClipboard();
+
 protected:
     void paintEvent(QPaintEvent *event) override;
     void keyPressEvent(QKeyEvent *event) override;
+    void mousePressEvent(QMouseEvent *event) override;
+    void mouseMoveEvent(QMouseEvent *event) override;
+    void mouseReleaseEvent(QMouseEvent *event) override;
+    void resizeEvent(QResizeEvent *event) override;
 
 private slots:
     void onTimeMachineSnapshotSelected(int index);
@@ -47,6 +60,10 @@ private slots:
 private:
     void load3270Font();
     void drawOIA(QPainter &painter, int effectiveWidth, int effectiveHeight);
+    int offsetForPosition(const QPoint &pos) const;
+    void updateHUDPosition();
+
+    void showDataInspector(int offset);
 
     x3270::ScreenBuffer *m_screen{nullptr};
     x3270::EbcdicCodec *m_codec{nullptr};
@@ -59,6 +76,9 @@ private:
     static constexpr int kOIARows = 2;
 
     bool m_showRuler{false};
+    int m_selStart{-1};
+    int m_selEnd{-1};
+    bool m_isSelecting{false};
 
     QTimer *m_refreshTimer{nullptr};
 

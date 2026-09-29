@@ -4,7 +4,6 @@
 #include <QLabel>
 #include <QSettings>
 #include <QCompleter>
-#include <QStringListModel>
 #include <QJsonDocument>
 #include <QJsonArray>
 #include <QJsonObject>
@@ -17,9 +16,10 @@ CommandDockWidget::CommandDockWidget(QWidget *parent)
     setStyleSheet(
         "QWidget { background-color: #252526; color: #cccccc; font-size: 11px; }"
         "QLineEdit { background-color: #3c3c3c; color: #ffffff; border: 1px solid #555555; border-radius: 3px; padding: 2px; }"
-        "QPushButton { background-color: #333333; border: 1px solid #454545; border-radius: 3px; padding: 3px 8px; white-space: nowrap; }"
+        "QPushButton { background-color: #333333; color: #ffffff; border: 1px solid #454545; border-radius: 3px; padding: 3px 8px; white-space: nowrap; }"
         "QPushButton:hover { background-color: #444444; }"
-        "QComboBox { background-color: #333333; border: 1px solid #454545; border-radius: 3px; padding: 2px; }"
+        "QPushButton:checked { background-color: #007acc; border-color: #0099ff; color: #ffffff; font-weight: bold; }"
+        "QComboBox { background-color: #333333; color: #ffffff; border: 1px solid #454545; border-radius: 3px; padding: 2px; }"
     );
 
     setupUi();
@@ -88,12 +88,14 @@ void CommandDockWidget::setupUi() {
 
     connect(m_ispfField, &QLineEdit::returnPressed, this, &CommandDockWidget::onIspfReturnPressed);
 
-    // 4. Toggles
+    // 4. Ruler Button (Pulsante a due stati interattivo)
     m_rulerBtn = new QPushButton("  Ruler", container);
+    m_rulerBtn->setCheckable(true);
     m_rulerBtn->setToolTip("Toggle Crosshair Ruler");
-    connect(m_rulerBtn, &QPushButton::clicked, this, [this]() { emit toggleRulerRequested(); });
+    connect(m_rulerBtn, &QPushButton::toggled, this, &CommandDockWidget::toggleRulerRequested);
     mainLayout->addWidget(m_rulerBtn);
 
+    // 5. Time-Machine Button
     m_timeMachineBtn = new QPushButton("  Time-Machine", container);
     m_timeMachineBtn->setToolTip("Toggle Screen History (Cmd+Opt+T)");
     connect(m_timeMachineBtn, &QPushButton::clicked, this, [this]() { emit toggleTimeMachineRequested(); });
@@ -101,13 +103,12 @@ void CommandDockWidget::setupUi() {
 
     mainLayout->addStretch();
 
-    // 5. Campo SSH/OOB
+    // 6. Campo SSH/OOB
     QLabel *oobLabel = new QLabel("SSH/OOB:", container);
     m_oobField = new QLineEdit(container);
     m_oobField->setPlaceholderText("TSO / System...");
     m_oobField->setMinimumWidth(200);
 
-    // Carica autocompletamento da commands.json
     QStringList completions;
     QFile cmdFile(":/commands.json");
     if (!cmdFile.open(QIODevice::ReadOnly)) {

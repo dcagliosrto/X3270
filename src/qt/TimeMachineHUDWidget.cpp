@@ -7,15 +7,15 @@
 TimeMachineHUDWidget::TimeMachineHUDWidget(QWidget *parent)
     : QWidget(parent) {
 
-    setFixedHeight(40);
+    setFixedHeight(38);
     setStyleSheet(
-        "QWidget#TimeMachineHUD { background-color: rgba(30, 30, 30, 230); border-radius: 8px; border: 1px solid #444444; }"
-        "QPushButton { background-color: #333333; color: #ffffff; border: 1px solid #555555; border-radius: 4px; padding: 2px 8px; font-size: 11px; }"
-        "QPushButton:hover { background-color: #007acc; }"
-        "QPushButton:checked { background-color: #e67e22; border-color: #d35400; }"
-        "QSlider::groove:horizontal { height: 4px; background: #555555; border-radius: 2px; }"
+        "QWidget#TimeMachineHUD { background-color: rgba(25, 25, 25, 220); border-radius: 10px; border: 1px solid rgba(255, 255, 255, 40); }"
+        "QPushButton { background-color: rgba(255, 255, 255, 20); color: #ffffff; border: 1px solid rgba(255, 255, 255, 30); border-radius: 4px; padding: 2px 8px; font-size: 11px; font-weight: 500; }"
+        "QPushButton:hover { background-color: #007acc; border-color: #0099ff; }"
+        "QPushButton:checked { background-color: #e67e22; border-color: #d35400; color: #ffffff; }"
+        "QSlider::groove:horizontal { height: 4px; background: rgba(255, 255, 255, 30); border-radius: 2px; }"
         "QSlider::handle:horizontal { background: #007acc; width: 12px; margin: -4px 0; border-radius: 6px; }"
-        "QLineEdit { background-color: #222222; color: #ffffff; border: 1px solid #555555; border-radius: 4px; padding: 2px 6px; font-size: 11px; }"
+        "QLineEdit { background-color: rgba(0, 0, 0, 150); color: #ffffff; border: 1px solid rgba(255, 255, 255, 30); border-radius: 4px; padding: 2px 6px; font-size: 11px; }"
         "QLabel { color: #ffffff; font-family: monospace; font-size: 11px; }"
     );
     setObjectName("TimeMachineHUD");
@@ -39,7 +39,6 @@ void TimeMachineHUDWidget::setupUi() {
     m_infoLabel = new QLabel("--:--:-- (#0/0)", this);
     m_infoLabel->setAlignment(Qt::AlignCenter);
 
-    // PIN & Bookmark
     m_prevPinBtn = new QPushButton("|<", this);
     m_prevPinBtn->setToolTip("Jump to Previous PIN");
     m_pinBtn = new QPushButton("PIN", this);
@@ -48,21 +47,18 @@ void TimeMachineHUDWidget::setupUi() {
     m_nextPinBtn = new QPushButton(">|", this);
     m_nextPinBtn->setToolTip("Jump to Next PIN");
 
-    // Export & Import
     m_exportBtn = new QPushButton("Export", this);
     m_importBtn = new QPushButton("Import", this);
 
-    // Search
     m_searchField = new QLineEdit(this);
     m_searchField->setPlaceholderText("Search...");
     m_searchField->setFixedWidth(90);
 
-    // Diff & Live
     m_diffBtn = new QPushButton("DIFF", this);
     m_diffBtn->setCheckable(true);
 
     m_liveBtn = new QPushButton("LIVE >>", this);
-    m_liveBtn->setStyleSheet("QPushButton { background-color: #27ae60; font-weight: bold; } QPushButton:hover { background-color: #2ecc71; }");
+    m_liveBtn->setStyleSheet("QPushButton { background-color: #27ae60; font-weight: bold; border-color: #2ecc71; } QPushButton:hover { background-color: #2ecc71; }");
 
     layout->addWidget(m_prevBtn);
     layout->addWidget(m_nextBtn);
@@ -139,4 +135,6 @@ void TimeMachineHUDWidget::updateHUD(int count, int currentIndex, qint64 timesta
     m_pinBtn->setChecked(isPinned);
     m_pinBtn->setText(isPinned ? "PINNED" : "PIN");
     m_pinBtn->blockSignals(false);
+
+    adjustSize();
 }

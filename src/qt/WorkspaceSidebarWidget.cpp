@@ -13,7 +13,7 @@ WorkspaceSidebarWidget::WorkspaceSidebarWidget(QWidget *parent)
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
 
-    // 1. Albero dei sistemi (NSSourceList Style)
+    // 1. Albero dei sistemi
     m_tree = new QTreeWidget(this);
     m_tree->setHeaderHidden(true);
     m_tree->setIndentation(12);
@@ -25,22 +25,30 @@ WorkspaceSidebarWidget::WorkspaceSidebarWidget(QWidget *parent)
 
     layout->addWidget(m_tree);
 
-    // 2. Bottom Bar con 3 pulsanti (+, -, Edit)
+    // 2. Bottom Bar ben visibile con alto contrasto
     QWidget *bottomBar = new QWidget(this);
-    bottomBar->setFixedHeight(28);
-    bottomBar->setStyleSheet("background-color: #252526; border-top: 1px solid #333333;");
+    bottomBar->setFixedHeight(30);
+    bottomBar->setStyleSheet("background-color: #2d2d2d; border-top: 1px solid #444444;");
 
     QHBoxLayout *btnLayout = new QHBoxLayout(bottomBar);
-    btnLayout->setContentsMargins(6, 2, 6, 2);
-    btnLayout->setSpacing(4);
+    btnLayout->setContentsMargins(6, 3, 6, 3);
+    btnLayout->setSpacing(6);
 
     QPushButton *addBtn = new QPushButton("+", bottomBar);
     QPushButton *remBtn = new QPushButton("-", bottomBar);
     QPushButton *editBtn = new QPushButton("Edit", bottomBar);
 
-    addBtn->setFixedSize(22, 20);
-    remBtn->setFixedSize(22, 20);
-    editBtn->setFixedHeight(20);
+    QString btnStyle = 
+        "QPushButton { background-color: #3c3c3c; color: #ffffff; border: 1px solid #555555; border-radius: 3px; font-weight: bold; font-size: 11px; }"
+        "QPushButton:hover { background-color: #007acc; border-color: #0099ff; }";
+
+    addBtn->setStyleSheet(btnStyle);
+    remBtn->setStyleSheet(btnStyle);
+    editBtn->setStyleSheet(btnStyle);
+
+    addBtn->setFixedSize(24, 22);
+    remBtn->setFixedSize(24, 22);
+    editBtn->setFixedHeight(22);
 
     addBtn->setToolTip("Add Session");
     remBtn->setToolTip("Remove Selected");

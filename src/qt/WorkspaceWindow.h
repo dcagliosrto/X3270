@@ -1,10 +1,10 @@
-// src/qt/WorkspaceWindow.h
 #pragma once
 
 #include <QMainWindow>
 #include <QSplitter>
 #include <QLabel>
 #include <QList>
+
 #include "WorkspaceSidebarWidget.h"
 #include "TerminalPaneWidget.h"
 #include "WorkspaceManager.h"
@@ -22,18 +22,22 @@ private slots:
     void onSplitRequested(TerminalPaneWidget *pane, Qt::Orientation orientation);
     void onCloseRequested(TerminalPaneWidget *pane);
 
+    // Slot per il broadcast a gruppi
+    void onBroadcastIspfRequested(const QString &cmd, const QString &group, TerminalPaneWidget *sender);
+    void onBroadcastOobRequested(const QString &cmd, const QString &group, TerminalPaneWidget *sender);
+
 private:
     void setupUi();
+    void setActivePane(TerminalPaneWidget *pane);
     void setRootWidget(QWidget *widget);
     void replaceWidget(QWidget *oldWidget, QWidget *newWidget);
-    void setActivePane(TerminalPaneWidget *pane);
     void checkEmptyState();
 
     QSplitter *m_mainSplitter{nullptr};
     WorkspaceSidebarWidget *m_sidebar{nullptr};
     QWidget *m_paneContainer{nullptr};
-    QLabel *m_emptyLabel{nullptr};
     QWidget *m_transferDockPlaceholder{nullptr};
+    QLabel *m_emptyLabel{nullptr};
 
     QList<TerminalPaneWidget*> m_allPanes;
     TerminalPaneWidget *m_activePane{nullptr};

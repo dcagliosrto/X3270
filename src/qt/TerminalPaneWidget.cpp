@@ -31,41 +31,25 @@ TerminalPaneWidget::TerminalPaneWidget(const ConnectionSettings &settings, QWidg
     layout->addWidget(m_terminal, 1);
     layout->addWidget(m_commandDock);
 
-    // Esecuzione comandi ISPF con posizionamento EBCDIC
+    // Esecuzione comandi ISPF + Broadcast
     connect(m_commandDock, &CommandDockWidget::ispfCommandRequested, this, [this](const QString &cmd, const QString &group) {
-        Q_UNUSED(group);
         m_terminal->executeISPFCommand(cmd);
+        if (!group.isEmpty()) {
+            emit broadcastIspfCommandRequested(cmd, group, this);
+        }
     });
 
-    // Esecuzione comandi SSH Out-of-Band
+    // Esecuzione comandi SSH OOB + Broadcast
     connect(m_commandDock, &CommandDockWidget::oobCommandRequested, this, [this](const QString &cmd, const QString &group) {
-        Q_UNUSED(group);
-        QString host = m_settings.host;
-        
-        QProcess *proc = new QProcess(this);
-        QString sshCmd = QString("ssh %1 \"%2\"").arg(host, cmd);
-        
-        connect(proc, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), this, [this, proc, cmd, host]() {
-            QString output = proc->readAllStandardOutput();
-            if (output.isEmpty()) output = proc->readAllStandardError();
-            if (output.isEmpty()) output = "(Command executed successfully with no output)";
-
-            OOBPopoverWidget dlg(QString("OOB Result [%1]: %2").arg(host, cmd), output, this);
-            dlg.exec();
-            proc->deleteLater();
-        });
-
-        proc->start("bash", QStringList() << "-c" << sshCmd);
+        executeOobCommand(cmd);
+        if (!group.isEmpty()) {
+            emit broadcastOobCommandRequested(cmd, group, this);
+        }
     });
 
-    // Collegamento pulsanti Ruler e Time-Machine
-    connect(m_commandDock, &CommandDockWidget::toggleRulerRequested, this, [this]() {
-        if (m_terminal) m_terminal->toggleRuler();
-    });
-
-    connect(m_commandDock, &CommandDockWidget::toggleTimeMachineRequested, this, [this]() {
-        if (m_terminal) m_terminal->toggleTimeMachine();
-    });
+    // Ruler e Time-Machine
+    connect(m_commandDock, &CommandDockWidget::toggleRulerRequested, m_terminal, &TerminalWidget::setRulerVisible);
+    connect(m_commandDock, &CommandDockWidget::toggleTimeMachineRequested, m_terminal, &TerminalWidget::toggleTimeMachine);
 
     startSession();
     setActive(true);
@@ -75,6 +59,24 @@ TerminalPaneWidget::~TerminalPaneWidget() {
     m_isClosing = true;
     if (m_session) m_session->disconnect();
     if (m_networkThread.joinable()) m_networkThread.join();
+}
+
+void TerminalPaneWidget::executeOobCommand(const QString &cmd) {
+    QString host = m_settings.host;
+    QProcess *proc = new QProcess(this);
+    QString sshCmd = QString("ssh %1 \"%2\"").arg(host, cmd);
+
+    connect(proc, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), this, [this, proc, cmd, host]() {
+        QString output = proc->readAllStandardOutput();
+        if (output.isEmpty()) output = proc->readAllStandardError();
+        if (output.isEmpty()) output = "(Command executed successfully with no output)";
+
+        OOBPopoverWidget dlg(QString("OOB Result [%1]: %2").arg(host, cmd), output, this);
+        dlg.exec();
+        proc->deleteLater();
+    });
+
+    proc->start("bash", QStringList() << "-c" << sshCmd);
 }
 
 void TerminalPaneWidget::setupHeader() {
@@ -147,7 +149,7 @@ void TerminalPaneWidget::startSession() {
                 payload = &stripped;
             }
             m_parser->processRecord(*payload);
-            m_terminal->captureCurrentScreenSnapshot(); // Salva lo snapshot per la Time-Machine
+            m_terminal->captureCurrentScreenSnapshot();
             m_terminal->update();
         });
     });

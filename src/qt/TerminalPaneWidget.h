@@ -28,12 +28,19 @@ public:
     bool isActive() const { return m_isActive; }
 
     TerminalWidget* terminalWidget() { return m_terminal; }
+    CommandDockWidget* commandDock() { return m_commandDock; }
     const ConnectionSettings& settings() const { return m_settings; }
+
+    void executeOobCommand(const QString &cmd);
 
 signals:
     void paneFocused(TerminalPaneWidget *pane);
     void splitRequested(TerminalPaneWidget *pane, Qt::Orientation orientation);
     void closeRequested(TerminalPaneWidget *pane);
+
+    // Segnali per il broadcast a gruppi di terminali
+    void broadcastIspfCommandRequested(const QString &cmd, const QString &group, TerminalPaneWidget *sender);
+    void broadcastOobCommandRequested(const QString &cmd, const QString &group, TerminalPaneWidget *sender);
 
 protected:
     void mousePressEvent(QMouseEvent *event) override;

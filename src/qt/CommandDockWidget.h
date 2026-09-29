@@ -5,20 +5,20 @@
 #include <QLineEdit>
 #include <QPushButton>
 #include <QHBoxLayout>
-#include <QCompleter>
 
 class CommandDockWidget : public QWidget {
     Q_OBJECT
 
 public:
     explicit CommandDockWidget(QWidget *parent = nullptr);
+
     void setLinkGroup(const QString &group) { m_linkGroup = group; }
     QString linkGroup() const { return m_linkGroup; }
 
 signals:
     void ispfCommandRequested(const QString &cmd, const QString &group);
     void oobCommandRequested(const QString &cmd, const QString &group);
-    void toggleRulerRequested();
+    void toggleRulerRequested(bool enabled); // Trasmette lo stato attivo/inattivo
     void toggleTimeMachineRequested();
 
 private slots:

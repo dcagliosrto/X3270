@@ -2,6 +2,8 @@
 #include <QFontDatabase>
 #include <QPaintEvent>
 #include <QCoreApplication>
+#include <QGuiApplication>
+#include <QClipboard>
 #include <QFile>
 #include <QDir>
 #include <QSettings>
@@ -89,9 +91,13 @@ QSize TerminalWidget::sizeHint() const {
     return QSize(cols * m_charWidth, (rows + kOIARows) * m_charHeight);
 }
 
-void TerminalWidget::toggleRuler() {
-    m_showRuler = !m_showRuler;
+void TerminalWidget::setRulerVisible(bool visible) {
+    m_showRuler = visible;
     update();
+}
+
+void TerminalWidget::toggleRuler() {
+    setRulerVisible(!m_showRuler);
 }
 
 void TerminalWidget::executeISPFCommand(const QString &command) {
@@ -190,8 +196,9 @@ void TerminalWidget::paintEvent(QPaintEvent *event) {
         painter.scale(scaleX, scaleY);
 
         const ushort *chars = reinterpret_cast<const ushort*>(snap->characterBuffer.constData());
-        QList<int> diffMap;
+        const uint32_t *attrs = reinterpret_cast<const uint32_t*>(snap->attributeBuffer.constData());
 
+        QList<int> diffMap;
         if (m_isDiffActive) {
             int baseIdx = TimeMachineManager::instance().baselinePinIndex();
             const ScreenSnapshot *baseSnap = (baseIdx >= 0) ? TimeMachineManager::instance().snapshotAt(baseIdx)
@@ -201,6 +208,11 @@ void TerminalWidget::paintEvent(QPaintEvent *event) {
             }
         }
 
+        int r1 = (m_selStart != -1 && m_selEnd != -1) ? std::min(m_selStart / cols, m_selEnd / cols) : -1;
+        int r2 = (m_selStart != -1 && m_selEnd != -1) ? std::max(m_selStart / cols, m_selEnd / cols) : -1;
+        int c1 = (m_selStart != -1 && m_selEnd != -1) ? std::min(m_selStart % cols, m_selEnd % cols) : -1;
+        int c2 = (m_selStart != -1 && m_selEnd != -1) ? std::max(m_selStart % cols, m_selEnd % cols) : -1;
+
         for (int r = 0; r < rows; ++r) {
             for (int c = 0; c < cols; ++c) {
                 int pos = r * cols + c;
@@ -209,20 +221,46 @@ void TerminalWidget::paintEvent(QPaintEvent *event) {
                 int y = r * m_charHeight;
 
                 bool isModified = (!diffMap.isEmpty() && diffMap[pos] == CellDiffModified);
-                QColor bg = isModified ? QColor(115, 51, 0, 200) : Qt::black;
-                QColor fg = isModified ? QColor(255, 235, 80) : QColor(51, 217, 51);
+                bool isSelected = (m_selStart != -1 && r >= r1 && r <= r2 && c >= c1 && c <= c2);
 
-                if (bg != Qt::black) painter.fillRect(x, y, m_charWidth, m_charHeight, bg);
+                QColor fgColor = QColor(51, 217, 51);
+                QColor bgColor = Qt::black;
+
+                if (attrs) {
+                    uint32_t packed = attrs[pos];
+                    uint8_t colorType = (packed >> 16) & 0xFF;
+                    uint8_t colorVal = (packed >> 8) & 0xFF;
+                    uint8_t activeAttr = packed & 0xFF;
+
+                    if (colorType == 1) {
+                        fgColor = colorFor3270Code(colorVal);
+                    } else {
+                        bool isProtected = (activeAttr & 0x20) != 0;
+                        bool isIntensified = (activeAttr & 0x08) != 0;
+                        fgColor = getCellColor(isProtected, isIntensified);
+                    }
+                }
+
+                if (isModified) {
+                    bgColor = QColor(115, 51, 0, 200);
+                    fgColor = QColor(255, 235, 80);
+                }
+
+                if (isSelected) {
+                    bgColor = QColor(38, 79, 120);
+                    fgColor = Qt::white;
+                }
+
+                if (bgColor != Qt::black) painter.fillRect(x, y, m_charWidth, m_charHeight, bgColor);
                 if (uc > 0x20) {
-                    painter.setPen(fg);
+                    painter.setPen(fgColor);
                     painter.drawText(x, y + m_baseline, QString(QChar(uc)));
                 }
             }
         }
+
         drawOIA(painter, cols * m_charWidth, (rows + kOIARows) * m_charHeight);
         painter.restore();
-
-        if (m_timeMachineHUD) m_timeMachineHUD->move((width() - m_timeMachineHUD->width()) / 2, height() - 50);
         return;
     }
 
@@ -245,6 +283,11 @@ void TerminalWidget::paintEvent(QPaintEvent *event) {
 
     painter.save();
     painter.scale(scaleX, scaleY);
+
+    int r1 = (m_selStart != -1 && m_selEnd != -1) ? std::min(m_selStart / cols, m_selEnd / cols) : -1;
+    int r2 = (m_selStart != -1 && m_selEnd != -1) ? std::max(m_selStart / cols, m_selEnd / cols) : -1;
+    int c1 = (m_selStart != -1 && m_selEnd != -1) ? std::min(m_selStart % cols, m_selEnd % cols) : -1;
+    int c2 = (m_selStart != -1 && m_selEnd != -1) ? std::max(m_selStart % cols, m_selEnd % cols) : -1;
 
     for (int r = 0; r < rows; ++r) {
         for (int c = 0; c < cols; ++c) {
@@ -272,6 +315,12 @@ void TerminalWidget::paintEvent(QPaintEvent *event) {
 
             if (cell.highlight == 0xF2) std::swap(fgColor, bgColor);
 
+            bool isSelected = (m_selStart != -1 && r >= r1 && r <= r2 && c >= c1 && c <= c2);
+            if (isSelected) {
+                bgColor = QColor(38, 79, 120);
+                fgColor = Qt::white;
+            }
+
             if (bgColor != Qt::black) {
                 painter.fillRect(x, y, m_charWidth, m_charHeight, bgColor);
             }
@@ -289,21 +338,28 @@ void TerminalWidget::paintEvent(QPaintEvent *event) {
         }
     }
 
-    // Block Cursor
+    // Cursor
     int cursorPos = m_screen->cursorPos();
     int curR = cursorPos / cols;
     int curC = cursorPos % cols;
     painter.fillRect(curC * m_charWidth, curR * m_charHeight, m_charWidth, m_charHeight, QColor(51, 217, 51, 150));
 
-    // Crosshair Ruler
+    // Crosshair Ruler Overlay
     if (m_showRuler) {
-        int lineX = curC * m_charWidth;
-        int lineY = (curR + 1) * m_charHeight;
-        int textAreaBottom = rows * m_charHeight;
+        qreal lineX = curC * m_charWidth;
+        qreal lineY = (curR + 1) * m_charHeight;
+        qreal textWidth = cols * m_charWidth;
+        qreal textAreaHeight = rows * m_charHeight;
 
-        painter.setPen(QPen(QColor(255, 50, 50, 120), 2));
-        painter.drawLine(0, lineY, cols * m_charWidth, lineY);
-        painter.drawLine(lineX, 0, lineX, textAreaBottom);
+        QPen rulerPen(QColor(255, 50, 50, 180), 2);
+        rulerPen.setCosmetic(true); // Mantiene lo spessore a 2px invariato durante lo scaling
+        painter.setPen(rulerPen);
+
+        // Linea Orizzontale (sotto la riga del cursore)
+        painter.drawLine(QPointF(0, lineY), QPointF(textWidth, lineY));
+
+        // Linea Verticale (bordo sinistro della colonna cursore)
+        painter.drawLine(QPointF(lineX, 0), QPointF(lineX, textAreaHeight));
     }
 
     drawOIA(painter, cols * m_charWidth, (rows + kOIARows) * m_charHeight);
@@ -376,7 +432,11 @@ void TerminalWidget::captureCurrentScreenSnapshot() {
 
             uint8_t colorVal = cell.fgColor;
             uint8_t colorType = (colorVal != 0x00) ? 1 : 2;
-            attrs[pos] = (static_cast<uint32_t>(colorType) << 16) | (static_cast<uint32_t>(colorVal) << 8) | cell.attr;
+
+            int faIdx = m_screen->findFieldStart(pos);
+            uint8_t activeAttr = (faIdx >= 0) ? m_screen->at(faIdx).attr : cell.attr;
+
+            attrs[pos] = (static_cast<uint32_t>(colorType) << 16) | (static_cast<uint32_t>(colorVal) << 8) | (activeAttr & 0xFF);
         }
     }
 
@@ -412,14 +472,29 @@ void TerminalWidget::toggleTimeMachine() {
             });
         }
 
-        m_timeMachineHUD->move((width() - m_timeMachineHUD->width()) / 2, height() - 55);
         m_timeMachineHUD->show();
         m_timeMachineHUD->raise();
+        updateHUDPosition();
 
         const auto *snap = TimeMachineManager::instance().snapshotAt(m_currentTimeMachineIndex);
         if (snap) m_timeMachineHUD->updateHUD(count, m_currentTimeMachineIndex, snap->timestamp, m_isDiffActive);
         update();
     }
+}
+
+void TerminalWidget::updateHUDPosition() {
+    if (m_timeMachineHUD && m_timeMachineHUD->isVisible()) {
+        m_timeMachineHUD->adjustSize();
+        int hudX = (width() - m_timeMachineHUD->width()) / 2;
+        int hudY = height() - m_timeMachineHUD->height() - 40;
+        m_timeMachineHUD->move(std::max(10, hudX), std::max(10, hudY));
+        m_timeMachineHUD->raise();
+    }
+}
+
+void TerminalWidget::resizeEvent(QResizeEvent *event) {
+    QWidget::resizeEvent(event);
+    updateHUDPosition();
 }
 
 void TerminalWidget::onTimeMachineSnapshotSelected(int index) {
@@ -455,13 +530,195 @@ void TerminalWidget::onTimeMachineSearchRequested(const QString &query, bool bac
     }
 }
 
+int TerminalWidget::offsetForPosition(const QPoint &pos) const {
+    int cols = (m_screen && m_screen->cols() > 0) ? m_screen->cols() : 80;
+    int rows = (m_screen && m_screen->rows() > 0) ? m_screen->rows() : 24;
+
+    int prefWidth = cols * m_charWidth;
+    int prefHeight = (rows + kOIARows) * m_charHeight;
+
+    if (prefWidth <= 0 || prefHeight <= 0) return -1;
+
+    qreal scaleX = static_cast<qreal>(width()) / prefWidth;
+    qreal scaleY = static_cast<qreal>(height()) / prefHeight;
+
+    int realX = static_cast<int>(pos.x() / scaleX);
+    int realY = static_cast<int>(pos.y() / scaleY);
+
+    int col = realX / m_charWidth;
+    int row = realY / m_charHeight;
+
+    if (col < 0 || col >= cols || row < 0 || row >= rows) return -1;
+    return row * cols + col;
+}
+
+void TerminalWidget::mousePressEvent(QMouseEvent *event) {
+    int offset = offsetForPosition(event->pos());
+    if (offset < 0) return;
+
+    // Alt + Clic / Option + Clic -> Apre il Data Inspector
+    if (event->modifiers() & Qt::AltModifier) {
+        showDataInspector(offset);
+        return;
+    }
+
+    if (!m_isTimeMachineActive && m_screen) {
+        m_screen->setCursor(offset);
+    }
+    m_selStart = offset;
+    m_selEnd = offset;
+    m_isSelecting = true;
+    update();
+}
+
+void TerminalWidget::showDataInspector(int offset) {
+    if (!m_screen || !m_codec) return;
+
+    int cols = m_screen->cols();
+    int rows = m_screen->rows();
+    int row = offset / cols;
+    int col = offset % cols;
+
+    // Estrazione parola/token sotto il cursore
+    int startCol = col;
+    while (startCol > 0 && m_screen->at(row * cols + (startCol - 1)).ch > 0x40) startCol--;
+
+    int endCol = col;
+    while (endCol < cols - 1 && m_screen->at(row * cols + (endCol + 1)).ch > 0x40) endCol++;
+
+    QByteArray rawBytes;
+    QString decodedText = "";
+
+    for (int c = startCol; c <= endCol; ++c) {
+        int pos = row * cols + c;
+        uint8_t ch = m_screen->at(pos).ch;
+        rawBytes.append(static_cast<char>(ch));
+        uint16_t uc = m_codec->toUnicode(ch);
+        decodedText += (uc >= 0x20) ? QChar(uc) : '.';
+    }
+
+    DataInspectorDialog dlg(rawBytes, decodedText, QByteArray(), QString(), this);
+    connect(&dlg, &DataInspectorDialog::addressJumpRequested, this, [this](const QString &addr) {
+        executeISPFCommand(QString("L %1").arg(addr));
+    });
+    dlg.exec();
+}
+
+void TerminalWidget::mouseMoveEvent(QMouseEvent *event) {
+    if (m_isSelecting) {
+        int offset = offsetForPosition(event->pos());
+        if (offset >= 0 && offset != m_selEnd) {
+            m_selEnd = offset;
+            update();
+        }
+    }
+}
+
+void TerminalWidget::mouseReleaseEvent(QMouseEvent *event) {
+    Q_UNUSED(event);
+    m_isSelecting = false;
+}
+
+void TerminalWidget::copyToClipboard() {
+    if (m_selStart == -1 || m_selEnd == -1) return;
+
+    int cols = (m_screen && m_screen->cols() > 0) ? m_screen->cols() : 80;
+    int r1 = std::min(m_selStart / cols, m_selEnd / cols);
+    int r2 = std::max(m_selStart / cols, m_selEnd / cols);
+    int c1 = std::min(m_selStart % cols, m_selEnd % cols);
+    int c2 = std::max(m_selStart % cols, m_selEnd % cols);
+
+    QString text = "";
+
+    if (m_isTimeMachineActive) {
+        const ScreenSnapshot *snap = TimeMachineManager::instance().snapshotAt(m_currentTimeMachineIndex);
+        if (!snap) return;
+        const ushort *chars = reinterpret_cast<const ushort*>(snap->characterBuffer.constData());
+
+        for (int r = r1; r <= r2; ++r) {
+            for (int c = c1; c <= c2; ++c) {
+                int pos = r * snap->cols + c;
+                ushort uc = chars[pos];
+                text += (uc >= 0x20) ? QChar(uc) : ' ';
+            }
+            if (r < r2) text += "\n";
+        }
+    } else if (m_screen && m_codec) {
+        for (int r = r1; r <= r2; ++r) {
+            for (int c = c1; c <= c2; ++c) {
+                int pos = r * cols + c;
+                const auto &cell = m_screen->at(pos);
+                if (cell.isFA || cell.isNonDisplay() || cell.ch == 0x00) {
+                    text += " ";
+                } else {
+                    uint16_t uc = m_codec->toUnicode(cell.ch);
+                    text += (uc >= 0x20) ? QChar(uc) : ' ';
+                }
+            }
+            if (r < r2) text += "\n";
+        }
+    }
+
+    QGuiApplication::clipboard()->setText(text);
+}
+
+void TerminalWidget::pasteFromClipboard() {
+    if (!m_kbd) return;
+
+    QString text = QGuiApplication::clipboard()->text();
+    if (text.isEmpty()) return;
+
+    int startCol = m_screen ? (m_screen->cursorPos() % m_screen->cols()) : 0;
+    int cols = m_screen ? m_screen->cols() : 80;
+    int rows = m_screen ? m_screen->rows() : 24;
+
+    for (int i = 0; i < text.length(); ++i) {
+        QChar c = text.at(i);
+        if (c == '\r') continue;
+
+        if (c == '\n') {
+            if (m_screen) {
+                int curRow = m_screen->cursorPos() / cols;
+                int nextRow = curRow + 1;
+                if (nextRow < rows) {
+                    m_screen->setCursor(nextRow * cols + startCol);
+                } else {
+                    break;
+                }
+            }
+        } else {
+            m_kbd->handleChar(c.unicode());
+        }
+    }
+    update();
+}
+
 void TerminalWidget::keyPressEvent(QKeyEvent *event) {
     int key = event->key();
     Qt::KeyboardModifiers mods = event->modifiers();
 
-    // Cmd+Option+T -> Toggle Time-Machine
+    // 1. Copia-Incolla (Cmd+C / Cmd+V o Ctrl+C / Ctrl+V)
+    if ((mods & Qt::ControlModifier || mods & Qt::MetaModifier) && key == Qt::Key_C) {
+        copyToClipboard();
+        return;
+    }
+    if ((mods & Qt::ControlModifier || mods & Qt::MetaModifier) && key == Qt::Key_V) {
+        pasteFromClipboard();
+        return;
+    }
+
+    // 2. Time-Machine (Cmd+Opt+T o Ctrl+Alt+T)
     if ((mods & Qt::ControlModifier || mods & Qt::AltModifier) && key == Qt::Key_T) {
         toggleTimeMachine();
+        return;
+    }
+
+    // 3. Toggle Insert Mode (Cmd+I o Ctrl+I)
+    if ((mods & Qt::ControlModifier || mods & Qt::MetaModifier) && key == Qt::Key_I) {
+        if (m_kbd) {
+            m_kbd->toggleInsert();
+            update();
+        }
         return;
     }
 
@@ -472,11 +729,37 @@ void TerminalWidget::keyPressEvent(QKeyEvent *event) {
 
     bool handled = false;
 
-    if (key == Qt::Key_Return || key == Qt::Key_Enter) {
+    // 4. Reset / Clear
+    if (key == Qt::Key_Escape) {
+        if (mods & Qt::AltModifier) {
+            handled = m_kbd->handleClear(); // Alt+Escape -> Clear
+        } else {
+            handled = m_kbd->handleReset(); // Escape -> Reset
+        }
+    }
+    // 5. Tasti PA1, PA2, PA3 (Alt+1, Alt+2, Alt+3)
+    else if (mods & Qt::AltModifier && key >= Qt::Key_1 && key <= Qt::Key_3) {
+        handled = m_kbd->handlePA(key - Qt::Key_0);
+    }
+    // 6. Erase EOF (Alt+Delete)
+    else if (mods & Qt::AltModifier && key == Qt::Key_Delete) {
+        handled = m_kbd->handleEraseEOF();
+    }
+    // 7. Erase Input (Alt+E)
+    else if (mods & Qt::AltModifier && key == Qt::Key_E) {
+        handled = m_kbd->handleEraseInput();
+    }
+    // 8. Invio
+    else if (key == Qt::Key_Return || key == Qt::Key_Enter) {
         handled = m_kbd->handleEnter();
-    } else if (key == Qt::Key_Tab) {
-        handled = m_kbd->handleTab((mods & Qt::ShiftModifier) != 0);
-    } else if (key == Qt::Key_Backspace) {
+    }
+    // 9. Tab / BackTab
+    else if (key == Qt::Key_Tab) {
+        bool backward = (mods & Qt::ShiftModifier) || (mods & Qt::AltModifier);
+        handled = m_kbd->handleTab(backward);
+    }
+    // 10. Modifica Testo e Cursore
+    else if (key == Qt::Key_Backspace) {
         handled = m_kbd->handleBackspace();
     } else if (key == Qt::Key_Delete) {
         handled = m_kbd->handleDelete();
@@ -490,11 +773,15 @@ void TerminalWidget::keyPressEvent(QKeyEvent *event) {
         handled = m_kbd->handleCursorLeft();
     } else if (key == Qt::Key_Right) {
         handled = m_kbd->handleCursorRight();
-    } else if (key >= Qt::Key_F1 && key <= Qt::Key_F12) {
+    }
+    // 11. Tasti Funzione PF1-PF24 (F1-F12 e Shift+F1-F12)
+    else if (key >= Qt::Key_F1 && key <= Qt::Key_F12) {
         int pfNum = key - Qt::Key_F1 + 1;
         if (mods & Qt::ShiftModifier) pfNum += 12;
         handled = m_kbd->handlePF(pfNum);
-    } else if (!event->text().isEmpty()) {
+    }
+    // 12. Caratteri EBCDIC stampabili
+    else if (!event->text().isEmpty()) {
         QChar c = event->text().at(0);
         if (c.unicode() >= 0x20 && c.unicode() != 0x7F) {
             handled = m_kbd->handleChar(c.unicode());

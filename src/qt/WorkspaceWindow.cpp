@@ -18,8 +18,9 @@ WorkspaceWindow::WorkspaceWindow(QWidget *parent)
 
 void WorkspaceWindow::setupUi() {
     m_mainSplitter = new QSplitter(Qt::Horizontal, this);
-    m_mainSplitter->setHandleWidth(1);
+    m_mainSplitter->setHandleWidth(2);
     m_mainSplitter->setStyleSheet("QSplitter::handle { background-color: #333333; }");
+    m_mainSplitter->setChildrenCollapsible(false);
 
     m_sidebar = new WorkspaceSidebarWidget(m_mainSplitter);
     m_sidebar->setMinimumWidth(220);
@@ -70,15 +71,36 @@ void WorkspaceWindow::onSessionDoubleClicked(const DXSessionConfig &config) {
     connect(newPane, &TerminalPaneWidget::splitRequested, this, &WorkspaceWindow::onSplitRequested);
     connect(newPane, &TerminalPaneWidget::closeRequested, this, &WorkspaceWindow::onCloseRequested);
 
+    // Connessione per il broadcast a gruppi
+    connect(newPane, &TerminalPaneWidget::broadcastIspfCommandRequested, this, &WorkspaceWindow::onBroadcastIspfRequested);
+    connect(newPane, &TerminalPaneWidget::broadcastOobCommandRequested, this, &WorkspaceWindow::onBroadcastOobRequested);
+
     if (m_allPanes.count() == 1) {
         setRootWidget(newPane);
     } else if (m_activePane) {
         replaceWidget(m_activePane, newPane);
         m_allPanes.removeOne(m_activePane);
+        m_activePane->setParent(nullptr);
         m_activePane->deleteLater();
     }
 
     setActivePane(newPane);
+}
+
+void WorkspaceWindow::onBroadcastIspfRequested(const QString &cmd, const QString &group, TerminalPaneWidget *sender) {
+    for (auto *pane : m_allPanes) {
+        if (pane != sender && pane->commandDock() && pane->commandDock()->linkGroup() == group) {
+            pane->terminalWidget()->executeISPFCommand(cmd);
+        }
+    }
+}
+
+void WorkspaceWindow::onBroadcastOobRequested(const QString &cmd, const QString &group, TerminalPaneWidget *sender) {
+    for (auto *pane : m_allPanes) {
+        if (pane != sender && pane->commandDock() && pane->commandDock()->linkGroup() == group) {
+            pane->executeOobCommand(cmd);
+        }
+    }
 }
 
 void WorkspaceWindow::onPaneFocused(TerminalPaneWidget *pane) {
@@ -89,6 +111,7 @@ void WorkspaceWindow::onSplitRequested(TerminalPaneWidget *pane, Qt::Orientation
     if (!pane) return;
 
     ConnectionSettings settings = pane->settings();
+
     TerminalPaneWidget *newPane = new TerminalPaneWidget(settings, this);
     m_allPanes.append(newPane);
 
@@ -96,9 +119,13 @@ void WorkspaceWindow::onSplitRequested(TerminalPaneWidget *pane, Qt::Orientation
     connect(newPane, &TerminalPaneWidget::splitRequested, this, &WorkspaceWindow::onSplitRequested);
     connect(newPane, &TerminalPaneWidget::closeRequested, this, &WorkspaceWindow::onCloseRequested);
 
+    connect(newPane, &TerminalPaneWidget::broadcastIspfCommandRequested, this, &WorkspaceWindow::onBroadcastIspfRequested);
+    connect(newPane, &TerminalPaneWidget::broadcastOobCommandRequested, this, &WorkspaceWindow::onBroadcastOobRequested);
+
     QSplitter *split = new QSplitter(orientation, this);
     split->setHandleWidth(2);
     split->setStyleSheet("QSplitter::handle { background-color: #007acc; }");
+    split->setChildrenCollapsible(false);
 
     replaceWidget(pane, split);
 
@@ -106,7 +133,7 @@ void WorkspaceWindow::onSplitRequested(TerminalPaneWidget *pane, Qt::Orientation
     split->addWidget(newPane);
 
     QList<int> sizes;
-    sizes << split->width() / 2 << split->width() / 2;
+    sizes << 500 << 500;
     split->setSizes(sizes);
 
     setActivePane(newPane);
@@ -117,15 +144,17 @@ void WorkspaceWindow::onCloseRequested(TerminalPaneWidget *pane) {
 
     m_allPanes.removeOne(pane);
 
-    QWidget *parent = pane->parentWidget();
-    QSplitter *parentSplitter = qobject_cast<QSplitter*>(parent);
+    QSplitter *parentSplitter = qobject_cast<QSplitter*>(pane->parentWidget());
 
+    pane->setParent(nullptr);
     pane->deleteLater();
 
     if (parentSplitter) {
         if (parentSplitter->count() == 1) {
             QWidget *remainingChild = parentSplitter->widget(0);
             replaceWidget(parentSplitter, remainingChild);
+            parentSplitter->deleteLater();
+        } else if (parentSplitter->count() == 0) {
             parentSplitter->deleteLater();
         }
     }
@@ -167,13 +196,11 @@ void WorkspaceWindow::replaceWidget(QWidget *oldWidget, QWidget *newWidget) {
 
     if (splitter) {
         int index = splitter->indexOf(oldWidget);
-        oldWidget->setParent(nullptr);
         splitter->insertWidget(index, newWidget);
     } else if (parent == m_paneContainer) {
         QVBoxLayout *layout = qobject_cast<QVBoxLayout*>(m_paneContainer->layout());
         if (layout) {
             layout->removeWidget(oldWidget);
-            oldWidget->setParent(nullptr);
             layout->addWidget(newWidget);
         }
     }

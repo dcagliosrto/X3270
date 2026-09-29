@@ -229,6 +229,7 @@ if(Qt6_FOUND)
         src/qt/MainWindow.cpp
         src/qt/TerminalWidget.cpp
         src/qt/ConnectionDialog.cpp
+        src/qt/DataInspectorDialog.cpp
         src/qt/SessionEditDialog.cpp
         src/qt/OOBPopoverWidget.cpp
         src/qt/TimeMachineManager.cpp
