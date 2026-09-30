@@ -14,6 +14,8 @@ public:
 
     void updateHUD(int count, int currentIndex, qint64 timestamp, bool isDiffActive);
 
+    int idealWidth() const;
+
 signals:
     void snapshotSelected(int index);
     void diffToggled(bool enabled);
@@ -24,6 +26,9 @@ signals:
     void exportRequested();
     void importRequested();
 
+protected:
+    void paintEvent(QPaintEvent *event) override;
+
 private slots:
     void onSliderValueChanged(int value);
     void onSearchReturnPressed();
@@ -31,6 +36,8 @@ private slots:
 private:
     void setupUi();
 
+    QWidget *m_container{nullptr};
+    
     QPushButton *m_prevBtn;
     QPushButton *m_nextBtn;
     QSlider *m_slider;

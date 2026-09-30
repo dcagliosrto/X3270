@@ -1,6 +1,9 @@
 #include "TimeMachineManager.h"
 #include <QFile>
 #include <QJsonDocument>
+#include <QJsonArray>
+#include <QJsonObject>
+#include <QDateTime>
 
 QJsonObject ScreenSnapshot::toJson() const {
     QJsonObject obj;
@@ -125,8 +128,7 @@ int TimeMachineManager::searchHistory(const QString &query, int startIndex, bool
     for (int i = start; i >= 0 && i < m_snapshots.size(); i += step) {
         const auto &snap = m_snapshots[i];
         const ushort *chars = reinterpret_cast<const ushort*>(snap.characterBuffer.constData());
-        
-        // Cast a char16_t* conforme alle specifiche Qt6
+
         QString screenText = QString::fromUtf16(reinterpret_cast<const char16_t*>(chars), snap.rows * snap.cols);
 
         if (screenText.contains(query, Qt::CaseInsensitive)) {

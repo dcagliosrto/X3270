@@ -1,4 +1,5 @@
 #include "TerminalWidget.h"
+#include <QPointer>
 #include <QFontDatabase>
 #include <QPaintEvent>
 #include <QCoreApplication>
@@ -7,6 +8,11 @@
 #include <QFile>
 #include <QDir>
 #include <QSettings>
+
+#include <QMouseEvent>
+#include <QRegularExpression>
+#include <QMenu>
+
 #include <algorithm>
 #include <utility>
 
@@ -259,6 +265,24 @@ void TerminalWidget::paintEvent(QPaintEvent *event) {
             }
         }
 
+        // --- Disegno del Cursore Storico ---
+        if (snap->cursorRow >= 0 && snap->cursorCol >= 0) {
+            int cx = snap->cursorCol * m_charWidth; 
+            int cy = snap->cursorRow * m_charHeight;
+            QRectF cursorRect(cx, cy, m_charWidth, m_charHeight);
+
+            painter.fillRect(cursorRect, QColor(51, 217, 51, 150));
+
+            int pos = snap->cursorRow * snap->cols + snap->cursorCol;
+            if (pos < snap->rows * snap->cols) {
+                ushort uc = chars[pos];
+                if (uc > 0x20) {
+                    painter.setPen(Qt::black);
+                    painter.drawText(QPointF(cx, cy + m_baseline), QString(QChar(uc)));
+                }
+            }
+        }
+
         drawOIA(painter, cols * m_charWidth, (rows + kOIARows) * m_charHeight);
         painter.restore();
         return;
@@ -352,14 +376,28 @@ void TerminalWidget::paintEvent(QPaintEvent *event) {
         qreal textAreaHeight = rows * m_charHeight;
 
         QPen rulerPen(QColor(255, 50, 50, 180), 2);
-        rulerPen.setCosmetic(true); // Mantiene lo spessore a 2px invariato durante lo scaling
+        rulerPen.setCosmetic(true); 
         painter.setPen(rulerPen);
 
-        // Linea Orizzontale (sotto la riga del cursore)
+        // Linea Orizzontale
         painter.drawLine(QPointF(0, lineY), QPointF(textWidth, lineY));
 
-        // Linea Verticale (bordo sinistro della colonna cursore)
+        // Linea Verticale
         painter.drawLine(QPointF(lineX, 0), QPointF(lineX, textAreaHeight));
+    }
+
+    // Bounding Box per l'area esaminata dal Data Inspector
+    if (m_hasInspectedBlock && m_screen) {
+        QPen boxPen(Qt::red, 2);
+        boxPen.setCosmetic(true);
+        painter.setPen(boxPen);
+
+        qreal boxX = m_inspectedMinCol * m_charWidth;
+        qreal boxY = m_inspectedMinRow * m_charHeight;
+        qreal boxW = (m_inspectedMaxCol - m_inspectedMinCol + 1) * m_charWidth;
+        qreal boxH = (m_inspectedMaxRow - m_inspectedMinRow + 1) * m_charHeight;
+
+        painter.drawRect(QRectF(boxX, boxY, boxW, boxH));
     }
 
     drawOIA(painter, cols * m_charWidth, (rows + kOIARows) * m_charHeight);
@@ -447,46 +485,67 @@ void TerminalWidget::captureCurrentScreenSnapshot() {
 void TerminalWidget::toggleTimeMachine() {
     if (m_isTimeMachineActive) {
         onTimeMachineReturnToLive();
-    } else {
-        int count = TimeMachineManager::instance().snapshotCount();
-        if (count == 0) return;
-
-        m_isTimeMachineActive = true;
-        m_currentTimeMachineIndex = count - 1;
-
-        if (!m_timeMachineHUD) {
-            m_timeMachineHUD = new TimeMachineHUDWidget(this);
-            connect(m_timeMachineHUD, &TimeMachineHUDWidget::snapshotSelected, this, &TerminalWidget::onTimeMachineSnapshotSelected);
-            connect(m_timeMachineHUD, &TimeMachineHUDWidget::diffToggled, this, &TerminalWidget::onTimeMachineDiffToggled);
-            connect(m_timeMachineHUD, &TimeMachineHUDWidget::returnToLiveRequested, this, &TerminalWidget::onTimeMachineReturnToLive);
-            connect(m_timeMachineHUD, &TimeMachineHUDWidget::searchRequested, this, &TerminalWidget::onTimeMachineSearchRequested);
-            connect(m_timeMachineHUD, &TimeMachineHUDWidget::pinToggled, this, [this]() {
-                TimeMachineManager::instance().togglePinAtIndex(m_currentTimeMachineIndex);
-                const auto *snap = TimeMachineManager::instance().snapshotAt(m_currentTimeMachineIndex);
-                if (snap) m_timeMachineHUD->updateHUD(TimeMachineManager::instance().snapshotCount(), m_currentTimeMachineIndex, snap->timestamp, m_isDiffActive);
-            });
-            connect(m_timeMachineHUD, &TimeMachineHUDWidget::jumpToPinRequested, this, [this](bool forward) {
-                int target = forward ? TimeMachineManager::instance().nextPinnedIndexAfter(m_currentTimeMachineIndex)
-                                     : TimeMachineManager::instance().prevPinnedIndexBefore(m_currentTimeMachineIndex);
-                if (target != -1) onTimeMachineSnapshotSelected(target);
-            });
-        }
-
-        m_timeMachineHUD->show();
-        m_timeMachineHUD->raise();
-        updateHUDPosition();
-
-        const auto *snap = TimeMachineManager::instance().snapshotAt(m_currentTimeMachineIndex);
-        if (snap) m_timeMachineHUD->updateHUD(count, m_currentTimeMachineIndex, snap->timestamp, m_isDiffActive);
-        update();
+        return;
     }
+
+    captureCurrentScreenSnapshot();
+
+    int count = TimeMachineManager::instance().snapshotCount();
+    if (count == 0) return;
+
+    m_isTimeMachineActive = true;
+    m_currentTimeMachineIndex = count - 1;
+
+    if (!m_timeMachineHUD) {
+        m_timeMachineHUD = new TimeMachineHUDWidget(this);
+
+        connect(m_timeMachineHUD, &TimeMachineHUDWidget::snapshotSelected, this, &TerminalWidget::onTimeMachineSnapshotSelected);
+        connect(m_timeMachineHUD, &TimeMachineHUDWidget::diffToggled, this, &TerminalWidget::onTimeMachineDiffToggled);
+        connect(m_timeMachineHUD, &TimeMachineHUDWidget::returnToLiveRequested, this, &TerminalWidget::onTimeMachineReturnToLive);
+        connect(m_timeMachineHUD, &TimeMachineHUDWidget::searchRequested, this, &TerminalWidget::onTimeMachineSearchRequested);
+
+        connect(m_timeMachineHUD, &TimeMachineHUDWidget::pinToggled, this, [this]() {
+            TimeMachineManager::instance().togglePinAtIndex(m_currentTimeMachineIndex);
+            if (const auto *snap = TimeMachineManager::instance().snapshotAt(m_currentTimeMachineIndex)) {
+                m_timeMachineHUD->updateHUD(TimeMachineManager::instance().snapshotCount(),
+                                            m_currentTimeMachineIndex,
+                                            snap->timestamp,
+                                            m_isDiffActive);
+            }
+        });
+
+        connect(m_timeMachineHUD, &TimeMachineHUDWidget::jumpToPinRequested, this, [this](bool forward) {
+            int target = forward ? TimeMachineManager::instance().nextPinnedIndexAfter(m_currentTimeMachineIndex)
+                                 : TimeMachineManager::instance().prevPinnedIndexBefore(m_currentTimeMachineIndex);
+            
+            if (target != -1) {
+                onTimeMachineSnapshotSelected(target);
+            }
+        });
+    }
+
+    m_timeMachineHUD->show();
+    m_timeMachineHUD->raise();
+
+    if (const auto *snap = TimeMachineManager::instance().snapshotAt(m_currentTimeMachineIndex)) {
+        m_timeMachineHUD->updateHUD(count, m_currentTimeMachineIndex, snap->timestamp, m_isDiffActive);
+    }
+
+    updateHUDPosition();
+    update();
 }
 
 void TerminalWidget::updateHUDPosition() {
     if (m_timeMachineHUD && m_timeMachineHUD->isVisible()) {
-        m_timeMachineHUD->adjustSize();
-        int hudX = (width() - m_timeMachineHUD->width()) / 2;
-        int hudY = height() - m_timeMachineHUD->height() - 40;
+        int maxWidth = std::max(100, width() - 20);
+        
+        int idealW = m_timeMachineHUD->idealWidth();
+        int actualWidth = std::min(maxWidth, idealW);
+
+        m_timeMachineHUD->setFixedSize(actualWidth, 42);
+
+        int hudX = (width() - actualWidth) / 2;
+        int hudY = height() - 42 - 40;
         m_timeMachineHUD->move(std::max(10, hudX), std::max(10, hudY));
         m_timeMachineHUD->raise();
     }
@@ -530,9 +589,16 @@ void TerminalWidget::onTimeMachineSearchRequested(const QString &query, bool bac
     }
 }
 
+// Manteniamo questa firma di convenienza che reindirizza al nuovo calcolo
 int TerminalWidget::offsetForPosition(const QPoint &pos) const {
-    int cols = (m_screen && m_screen->cols() > 0) ? m_screen->cols() : 80;
-    int rows = (m_screen && m_screen->rows() > 0) ? m_screen->rows() : 24;
+    return offsetForPoint(pos);
+}
+
+int TerminalWidget::offsetForPoint(const QPoint &pt) const {
+    if (!m_screen) return -1;
+
+    int cols = std::max(1, m_screen->cols());
+    int rows = std::max(1, m_screen->rows());
 
     int prefWidth = cols * m_charWidth;
     int prefHeight = (rows + kOIARows) * m_charHeight;
@@ -542,81 +608,95 @@ int TerminalWidget::offsetForPosition(const QPoint &pos) const {
     qreal scaleX = static_cast<qreal>(width()) / prefWidth;
     qreal scaleY = static_cast<qreal>(height()) / prefHeight;
 
-    int realX = static_cast<int>(pos.x() / scaleX);
-    int realY = static_cast<int>(pos.y() / scaleY);
+    qreal realX = pt.x() / scaleX;
+    qreal realY = pt.y() / scaleY;
 
-    int col = realX / m_charWidth;
-    int row = realY / m_charHeight;
+    int col = static_cast<int>(realX / m_charWidth);
+    int row = static_cast<int>(realY / m_charHeight);
 
-    if (col < 0 || col >= cols || row < 0 || row >= rows) return -1;
-    return row * cols + col;
+    if (col < 0 || col >= cols || row < 0 || row >= rows) {
+        return -1;
+    }
+
+    return (row * cols) + col;
 }
 
 void TerminalWidget::mousePressEvent(QMouseEvent *event) {
-    int offset = offsetForPosition(event->pos());
-    if (offset < 0) return;
-
-    // Alt + Clic / Option + Clic -> Apre il Data Inspector
-    if (event->modifiers() & Qt::AltModifier) {
-        showDataInspector(offset);
+    // Ignora i clic con tasto non sinistro (per evitare reset accidentali)
+    if (event->button() != Qt::LeftButton) {
+        QWidget::mousePressEvent(event);
         return;
     }
 
+    int offset = offsetForPoint(event->pos());
+    if (offset < 0) {
+        m_selStart = m_selEnd = -1;
+        m_hasInspectedBlock = false;
+        update();
+        return;
+    }
+
+    // --- OPTION/ALT + CLICK = Data Inspector ---
+    if ((event->modifiers() & Qt::AltModifier) && !m_isTimeMachineActive) {
+        bool insideSelection = false;
+        
+        if (m_selStart >= 0 && m_selEnd >= 0 && m_screen) {
+            int cols = m_screen->cols();
+            int r1 = m_selStart / cols, c1 = m_selStart % cols;
+            int r2 = m_selEnd / cols, c2 = m_selEnd % cols;
+            int minR = std::min(r1, r2), maxR = std::max(r1, r2);
+            int minC = std::min(c1, c2), maxC = std::max(c1, c2);
+            int clickR = offset / cols, clickC = offset % cols;
+            
+            insideSelection = (clickR >= minR && clickR <= maxR && clickC >= minC && clickC <= maxC);
+        }
+        
+        if (!insideSelection) {
+            if (m_screen) m_screen->setCursor(offset);
+            m_selStart = offset;
+            m_selEnd = offset;
+            update();
+        }
+        
+        showDataInspectorAtOffset(offset, event->globalPosition().toPoint());
+        return;
+    }
+
+    // --- Click Normale (Selezione Base) ---
     if (!m_isTimeMachineActive && m_screen) {
         m_screen->setCursor(offset);
     }
+    
     m_selStart = offset;
     m_selEnd = offset;
-    m_isSelecting = true;
+    m_hasInspectedBlock = false;
     update();
 }
 
-void TerminalWidget::showDataInspector(int offset) {
-    if (!m_screen || !m_codec) return;
-
-    int cols = m_screen->cols();
-    int rows = m_screen->rows();
-    int row = offset / cols;
-    int col = offset % cols;
-
-    // Estrazione parola/token sotto il cursore
-    int startCol = col;
-    while (startCol > 0 && m_screen->at(row * cols + (startCol - 1)).ch > 0x40) startCol--;
-
-    int endCol = col;
-    while (endCol < cols - 1 && m_screen->at(row * cols + (endCol + 1)).ch > 0x40) endCol++;
-
-    QByteArray rawBytes;
-    QString decodedText = "";
-
-    for (int c = startCol; c <= endCol; ++c) {
-        int pos = row * cols + c;
-        uint8_t ch = m_screen->at(pos).ch;
-        rawBytes.append(static_cast<char>(ch));
-        uint16_t uc = m_codec->toUnicode(ch);
-        decodedText += (uc >= 0x20) ? QChar(uc) : '.';
-    }
-
-    DataInspectorDialog dlg(rawBytes, decodedText, QByteArray(), QString(), this);
-    connect(&dlg, &DataInspectorDialog::addressJumpRequested, this, [this](const QString &addr) {
-        executeISPFCommand(QString("L %1").arg(addr));
-    });
-    dlg.exec();
-}
-
 void TerminalWidget::mouseMoveEvent(QMouseEvent *event) {
-    if (m_isSelecting) {
-        int offset = offsetForPosition(event->pos());
+    // Aggiorna la selezione solo se il tasto sinistro è attualmente premuto
+    if (event->buttons() & Qt::LeftButton) {
+        if (m_selStart == -1) return;
+        
+        int offset = offsetForPoint(event->pos());
         if (offset >= 0 && offset != m_selEnd) {
             m_selEnd = offset;
             update();
         }
+    } else {
+        QWidget::mouseMoveEvent(event);
     }
 }
 
 void TerminalWidget::mouseReleaseEvent(QMouseEvent *event) {
     Q_UNUSED(event);
-    m_isSelecting = false;
+    // Non è strettamente necessario resettare variabili se ci basiamo sui flag dei buttons nel Move,
+    // ma manteniamo il metodo per eventuale estendibilità futura.
+}
+
+void TerminalWidget::showDataInspector(int offset) {
+    // (Metodo di retrocompatibilità mantenuto - reindirizza al nuovo se chiamato dal codice legacy)
+    showDataInspectorAtOffset(offset, QCursor::pos());
 }
 
 void TerminalWidget::copyToClipboard() {
@@ -697,7 +777,7 @@ void TerminalWidget::keyPressEvent(QKeyEvent *event) {
     int key = event->key();
     Qt::KeyboardModifiers mods = event->modifiers();
 
-    // 1. Copia-Incolla (Cmd+C / Cmd+V o Ctrl+C / Ctrl+V)
+    // 1. Copia-Incolla
     if ((mods & Qt::ControlModifier || mods & Qt::MetaModifier) && key == Qt::Key_C) {
         copyToClipboard();
         return;
@@ -707,13 +787,13 @@ void TerminalWidget::keyPressEvent(QKeyEvent *event) {
         return;
     }
 
-    // 2. Time-Machine (Cmd+Opt+T o Ctrl+Alt+T)
+    // 2. Time-Machine
     if ((mods & Qt::ControlModifier || mods & Qt::AltModifier) && key == Qt::Key_T) {
         toggleTimeMachine();
         return;
     }
 
-    // 3. Toggle Insert Mode (Cmd+I o Ctrl+I)
+    // 3. Toggle Insert Mode
     if ((mods & Qt::ControlModifier || mods & Qt::MetaModifier) && key == Qt::Key_I) {
         if (m_kbd) {
             m_kbd->toggleInsert();
@@ -732,20 +812,20 @@ void TerminalWidget::keyPressEvent(QKeyEvent *event) {
     // 4. Reset / Clear
     if (key == Qt::Key_Escape) {
         if (mods & Qt::AltModifier) {
-            handled = m_kbd->handleClear(); // Alt+Escape -> Clear
+            handled = m_kbd->handleClear(); 
         } else {
-            handled = m_kbd->handleReset(); // Escape -> Reset
+            handled = m_kbd->handleReset(); 
         }
     }
-    // 5. Tasti PA1, PA2, PA3 (Alt+1, Alt+2, Alt+3)
+    // 5. Tasti PA1, PA2, PA3 
     else if (mods & Qt::AltModifier && key >= Qt::Key_1 && key <= Qt::Key_3) {
         handled = m_kbd->handlePA(key - Qt::Key_0);
     }
-    // 6. Erase EOF (Alt+Delete)
+    // 6. Erase EOF 
     else if (mods & Qt::AltModifier && key == Qt::Key_Delete) {
         handled = m_kbd->handleEraseEOF();
     }
-    // 7. Erase Input (Alt+E)
+    // 7. Erase Input 
     else if (mods & Qt::AltModifier && key == Qt::Key_E) {
         handled = m_kbd->handleEraseInput();
     }
@@ -774,7 +854,7 @@ void TerminalWidget::keyPressEvent(QKeyEvent *event) {
     } else if (key == Qt::Key_Right) {
         handled = m_kbd->handleCursorRight();
     }
-    // 11. Tasti Funzione PF1-PF24 (F1-F12 e Shift+F1-F12)
+    // 11. Tasti Funzione PF1-PF24 
     else if (key >= Qt::Key_F1 && key <= Qt::Key_F12) {
         int pfNum = key - Qt::Key_F1 + 1;
         if (mods & Qt::ShiftModifier) pfNum += 12;
@@ -792,5 +872,140 @@ void TerminalWidget::keyPressEvent(QKeyEvent *event) {
         update();
     } else {
         QWidget::keyPressEvent(event);
+    }
+}
+
+void TerminalWidget::showDataInspectorAtOffset(int offset, const QPoint &globalPos) {
+    if (!m_screen || !m_codec) return;
+    
+    QByteArray rawBytes;
+    QString decodedText;
+    QByteArray verticalHexBytes;
+    QString verticalDecodedText;
+    
+    int cols = m_screen->cols();
+    int maxScreenSize = m_screen->rows() * cols;
+    int minRow, maxRow, minCol, maxCol;
+    
+    bool isBlockSelection = (m_selStart >= 0 && m_selEnd > m_selStart && offset >= m_selStart && offset <= m_selEnd);
+    
+    if (isBlockSelection) {
+        int r1 = m_selStart / cols, c1 = m_selStart % cols;
+        int r2 = m_selEnd / cols, c2 = m_selEnd % cols;
+        minRow = std::min(r1, r2); maxRow = std::max(r1, r2);
+        minCol = std::min(c1, c2); maxCol = std::max(c1, c2);
+    } else {
+        // Smart Word Extraction
+        minRow = offset / cols;
+        maxRow = minRow;
+        int clickCol = offset % cols;
+        
+        minCol = clickCol;
+        while (minCol > 0 && m_screen->at(minRow * cols + (minCol - 1)).ch > 0x40) minCol--;
+        
+        maxCol = clickCol;
+        while (maxCol < cols - 1 && m_screen->at(minRow * cols + (maxCol + 1)).ch > 0x40) maxCol++;
+    }
+    
+    // Limiti di sicurezza
+    if (maxRow - minRow > 50) maxRow = minRow + 50;
+    if (maxCol > cols - 1) maxCol = cols - 1;
+    
+    m_hasInspectedBlock = true;
+    m_inspectedMinRow = minRow; m_inspectedMaxRow = maxRow;
+    m_inspectedMinCol = minCol; m_inspectedMaxCol = maxCol;
+    update();
+    
+    auto hexCharToInt = [](uint16_t c) -> int {
+        if (c >= '0' && c <= '9') return c - '0';
+        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+        return -1;
+    };
+    
+    for (int r = minRow; r <= maxRow; r++) {
+        bool canCheckVertical = (!isBlockSelection) || (r == maxRow - 1);
+        
+        for (int c = minCol; c <= maxCol; c++) {
+            int pos = r * cols + c;
+            if (pos >= maxScreenSize) continue;
+            
+            uint8_t byte = m_screen->at(pos).ch;
+            rawBytes.append(static_cast<char>(byte));
+            
+            uint16_t uc = m_codec->toUnicode(byte);
+            decodedText.append(uc >= 0x20 ? QChar(uc) : QChar('.'));
+            
+            if (canCheckVertical) {
+                int posBottom = pos + cols;
+                if (posBottom < maxScreenSize) {
+                    uint16_t uTop = m_codec->toUnicode(m_screen->at(pos).ch);
+                    uint16_t uBot = m_codec->toUnicode(m_screen->at(posBottom).ch);
+                    int hTop = hexCharToInt(uTop);
+                    int hBot = hexCharToInt(uBot);
+                    
+                    if (hTop >= 0 && hBot >= 0) {
+                        uint8_t vByte = static_cast<uint8_t>((hTop << 4) | hBot);
+                        verticalHexBytes.append(static_cast<char>(vByte));
+                        uint16_t vUc = m_codec->toUnicode(vByte);
+                        verticalDecodedText.append(vUc >= 0x20 ? QChar(vUc) : QChar('.'));
+                    } else {
+                        verticalHexBytes.append(static_cast<char>(0x00));
+                        verticalDecodedText.append('.');
+                    }
+                }
+            }
+        }
+    }
+    
+    bool hasValidVerticalHex = false;
+    for (char c : verticalHexBytes) {
+        if (c != 0x00) {
+            hasValidVerticalHex = true;
+            break;
+        }
+    }
+
+    if (hasValidVerticalHex && isBlockSelection) {
+        rawBytes = verticalHexBytes;
+        decodedText = verticalDecodedText;
+    }
+
+    QString cleanToken = decodedText.trimmed().remove(' ').remove('.');
+    QRegularExpression ptrRegex("^[0-9A-Fa-f]{8}$|^[0-9A-Fa-f]{16}$");
+    bool isPointer = (!cleanToken.isEmpty() && ptrRegex.match(cleanToken).hasMatch());
+
+    if (isPointer) {
+        QMenu *jumpMenu = new QMenu(this);
+        QAction *jumpAction = jumpMenu->addAction(QString("Jump to (L %1)").arg(cleanToken.toUpper()));
+        connect(jumpAction, &QAction::triggered, this, [this, cleanToken]() {
+            executeISPFCommand(QString("L %1").arg(cleanToken.toUpper()));
+        });
+        
+        connect(jumpMenu, &QMenu::aboutToHide, this, [this, jumpMenu]() {
+            m_hasInspectedBlock = false;
+            update();
+            jumpMenu->deleteLater();
+        });
+        
+        jumpMenu->popup(globalPos);
+        
+    } else {
+        static QPointer<DataInspectorDialog> inspectorDialog;
+        
+        if (inspectorDialog) {
+            inspectorDialog->close();
+            inspectorDialog->deleteLater();
+        }
+        
+        inspectorDialog = new DataInspectorDialog(rawBytes, decodedText, verticalHexBytes, verticalDecodedText, nullptr);
+        
+        inspectorDialog->setModal(false);
+        inspectorDialog->setAttribute(Qt::WA_DeleteOnClose, true);
+        inspectorDialog->setWindowFlags(Qt::Window | Qt::WindowStaysOnTopHint);
+        
+        inspectorDialog->show();
+        inspectorDialog->raise();
+        inspectorDialog->activateWindow();
     }
 }

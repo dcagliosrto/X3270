@@ -86,4 +86,13 @@ private:
     bool m_isTimeMachineActive{false};
     bool m_isDiffActive{false};
     int m_currentTimeMachineIndex{0};
+
+    void showDataInspectorAtOffset(int offset, const QPoint &globalPos);
+    int offsetForPoint(const QPoint &pt) const;
+
+    bool m_hasInspectedBlock{false};
+    int m_inspectedMinRow{0};
+    int m_inspectedMaxRow{0};
+    int m_inspectedMinCol{0};
+    int m_inspectedMaxCol{0};
 };

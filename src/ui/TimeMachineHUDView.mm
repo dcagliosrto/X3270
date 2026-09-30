@@ -71,7 +71,6 @@
     _nextPinButton.bezelStyle = NSBezelStyleInline;
     _nextPinButton.toolTip = @"Jump to Next PIN";
 
-
     // --- EXPORT & IMPORT ---
     _exportBtn = [NSButton buttonWithTitle:@"💾 Export" target:self action:@selector(onExportPressed:)];
     _exportBtn.bezelStyle = NSBezelStyleInline;
@@ -94,7 +93,7 @@
     _liveButton = [NSButton buttonWithTitle:@"LIVE ⏏" target:self action:@selector(onLivePressed:)];
     _liveButton.bezelStyle = NSBezelStyleInline;
     
-    // Add all components to the stack view
+    // Configurazione Stack View (Container orizzontale)
     NSStackView *stack = [NSStackView stackViewWithViews:@[
         _prevButton, 
         _nextButton, 
@@ -112,19 +111,42 @@
     
     stack.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     stack.alignment = NSLayoutAttributeHeight;
-    stack.spacing = 8; // Slightly reduced spacing from 10 to 8
+    stack.spacing = 8; 
     stack.edgeInsets = NSEdgeInsetsMake(6, 10, 6, 10);
     stack.translatesAutoresizingMaskIntoConstraints = NO;
     
-    [self addSubview:stack];
+    // Configurazione Scroll View
+    NSScrollView *scrollView = [[NSScrollView alloc] init];
+    scrollView.hasVerticalScroller = NO;
+    scrollView.hasHorizontalScroller = NO; 
+    scrollView.drawsBackground = NO;
+    scrollView.translatesAutoresizingMaskIntoConstraints = NO;
+    scrollView.documentView = stack;
+    
+    [self addSubview:scrollView];
+    
+    // Chiediamo alla HUD (self) di tentare di pareggiare la larghezza della stack view
+    NSLayoutConstraint *intrinsicWidth = [self.widthAnchor constraintEqualToAnchor:stack.widthAnchor];
+    intrinsicWidth.priority = NSLayoutPriorityDefaultHigh;
     
     [NSLayoutConstraint activateConstraints:@[
-        [stack.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],
-        [stack.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
-        [stack.topAnchor constraintEqualToAnchor:self.topAnchor],
-        [stack.bottomAnchor constraintEqualToAnchor:self.bottomAnchor],
+        // 1. La Scroll View riempie tutta la pillola
+        [scrollView.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],
+        [scrollView.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
+        [scrollView.topAnchor constraintEqualToAnchor:self.topAnchor],
+        [scrollView.bottomAnchor constraintEqualToAnchor:self.bottomAnchor],
+        
+        // 2. La Stack View si aggancia al contenuto della Scroll View, ma SENZA limitare il bordo destro!
+        [stack.leadingAnchor constraintEqualToAnchor:scrollView.contentView.leadingAnchor],
+        [stack.topAnchor constraintEqualToAnchor:scrollView.contentView.topAnchor],
+        [stack.bottomAnchor constraintEqualToAnchor:scrollView.contentView.bottomAnchor],
+        [stack.heightAnchor constraintEqualToAnchor:scrollView.contentView.heightAnchor],
+        
+        // 3. Limiti minimi dei componenti
         [_slider.widthAnchor constraintGreaterThanOrEqualToConstant:120],
-        [_searchField.widthAnchor constraintEqualToConstant:100] // Compattato a 100 per far spazio ai PIN
+        [_searchField.widthAnchor constraintEqualToConstant:100],
+        
+        intrinsicWidth
     ]];
 }
 
@@ -245,7 +267,10 @@
     [NSLayoutConstraint activateConstraints:@[
         [self.centerXAnchor constraintEqualToAnchor:parentView.centerXAnchor],
         [self.bottomAnchor constraintEqualToAnchor:parentView.bottomAnchor constant:-45],
-        [self.heightAnchor constraintEqualToConstant:36]
+        [self.heightAnchor constraintEqualToConstant:36],
+        
+        // This cuts the pill if the window is too small, enabling smooth scrolling
+        [self.widthAnchor constraintLessThanOrEqualToAnchor:parentView.widthAnchor constant:-20]
     ]];
 }
 

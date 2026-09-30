@@ -108,7 +108,29 @@ void DataInspectorDialog::analyzeBytes(const uint8_t *bytes, int len, QString &o
     for (int i = 0; i < len; ++i) {
         outText += (bytes[i] >= 0x20 && bytes[i] <= 0x7E) ? QChar(bytes[i]) : '.';
     }
-    outText += "\n-------------------------------------------------\n";
+    outText += "\n";
+
+    // --- ASN.1 Detection (PKCS#7, Certificati) ---
+    bool foundAsn = false;
+    for (int i = 0; i < len - 2; ++i) {
+        // ASN.1 SEQUENCE
+        if (bytes[i] == 0x30 && (bytes[i+1] == 0x81 || bytes[i+1] == 0x82)) {
+            outText += "FOUND  : ASN.1 SEQUENCE (Long/Multi-byte length)\n";
+            foundAsn = true;
+        }
+        // ASN.1 OID (PKCS#7 Data)
+        if (bytes[i] == 0x06 && bytes[i+1] == 0x09 && i + 10 < len) {
+            if (bytes[i+2]==0x2A && bytes[i+3]==0x86 && bytes[i+4]==0x48 &&
+                bytes[i+5]==0x86 && bytes[i+6]==0xF7 && bytes[i+7]==0x0D &&
+                bytes[i+8]==0x01 && bytes[i+9]==0x07 && bytes[i+10]==0x01) {
+                outText += "FOUND  : ASN.1 OID: PKCS#7 Data\n";
+                foundAsn = true;
+            }
+        }
+    }
+    if (foundAsn) outText += "\n";
+
+    outText += "-------------------------------------------------\n";
 
     // Decodificatori interi COMP / COMP-4
     if (len >= 2) {
@@ -131,13 +153,20 @@ void DataInspectorDialog::analyzeBytes(const uint8_t *bytes, int len, QString &o
         int exp = (ufw >> 24) & 0x7F;
         uint32_t frac = ufw & 0x00FFFFFF;
         double hfp_short = (1.0 - 2.0 * sign) * (static_cast<double>(frac) / 16777216.0) * std::pow(16.0, exp - 64);
-        outText += QString("HFP(S) : %1\n").arg(hfp_short);
+        outText += QString("HFP(S) : %1\n").arg(hfp_short, 0, 'g', 10);
     }
 
     if (len >= 8) {
         uint64_t dw = 0;
         for (int i = 0; i < 8; ++i) dw = (dw << 8) | bytes[i];
         outText += QString("COMP-D : %1\n").arg(static_cast<long long>(dw));
+
+        // HFP (IBM Hexadecimal Floating Point Long)
+        int sign = (dw >> 63) & 1;
+        int exp = (dw >> 56) & 0x7F;
+        uint64_t frac = dw & 0x00FFFFFFFFFFFFFFULL;
+        double hfp_long = (1.0 - 2.0 * sign) * (static_cast<double>(frac) / 72057594037927936.0) * std::pow(16.0, exp - 64);
+        outText += QString("HFP(L) : %1\n").arg(hfp_long, 0, 'g', 15);
 
         // STCK Timestamp
         uint64_t micros = dw >> 12;
@@ -151,6 +180,19 @@ void DataInspectorDialog::analyzeBytes(const uint8_t *bytes, int len, QString &o
 
     // COMP-3 (COBOL Packed Decimal)
     outText += QString("COMP-3 : %1\n").arg(decodeComp3(bytes, std::min(len, 32)));
+
+    // --- VSAM CONTROL INTERVAL (CIDF) ---
+    if (len >= 4) {
+        uint16_t offset = (bytes[0] << 8) | bytes[1];
+        uint16_t freeSpc = (bytes[2] << 8) | bytes[3];
+        outText += "=== VSAM CONTROL INTERVAL (CIDF) ===\n";
+        outText += QString("Free Space Offset : %1 bytes (0x%2)\n")
+                    .arg(offset)
+                    .arg(QString::number(offset, 16).rightJustified(4, '0').toUpper());
+        outText += QString("Free Space Length : %1 bytes (0x%2)\n")
+                    .arg(freeSpc)
+                    .arg(QString::number(freeSpc, 16).rightJustified(4, '0').toUpper());
+    }
 }
 
 QString DataInspectorDialog::decodeComp3(const uint8_t *bytes, int len) {
