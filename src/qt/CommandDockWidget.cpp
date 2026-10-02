@@ -10,8 +10,8 @@
 #include <QFile>
 #include <QCoreApplication>
 
-CommandDockWidget::CommandDockWidget(QWidget *parent)
-    : QWidget(parent) {
+CommandDockWidget::CommandDockWidget(const QList<DXFastPath> &fastPaths, QWidget *parent)
+    : QWidget(parent), m_fastPaths(fastPaths) {
     setFixedHeight(36);
     setStyleSheet(
         "QWidget { background-color: #252526; color: #cccccc; font-size: 11px; }"
@@ -135,14 +135,19 @@ void CommandDockWidget::setupUi() {
 }
 
 void CommandDockWidget::loadFastPaths() {
-    QSettings settings("DX3270", "CrossPlatform");
-
-    QStringList titles = {"=3.4", "=SDSF", "=2", "=X"};
-    QStringList cmds = {"=3.4", "=S;ST", "=2", "=X"};
-
-    for (int i = 0; i < titles.size(); ++i) {
-        QPushButton *btn = new QPushButton(titles[i], this);
-        btn->setProperty("cmd", cmds[i]);
+    QList<DXFastPath> pathsToLoad = m_fastPaths;
+    
+    // IL FALLBACK SALVAGENTE ESATTO
+    if (pathsToLoad.isEmpty()) {
+        pathsToLoad = {
+            {"=3.4", "=3.4"}, {"=3.2", "=3.2"}, 
+            {"SDSF", "=S;ST"}, {"LOG", "=S;LOG"}, {"TIME", "/D T"}
+        };
+    }
+    
+    for (const auto &fp : pathsToLoad) {
+        QPushButton *btn = new QPushButton(fp.title, this); // <--- Usare "this"
+        btn->setProperty("cmd", fp.cmd);
         connect(btn, &QPushButton::clicked, this, &CommandDockWidget::onIspfButtonClicked);
         m_fastPathsLayout->addWidget(btn);
     }

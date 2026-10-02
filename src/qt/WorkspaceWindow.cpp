@@ -63,6 +63,7 @@ void WorkspaceWindow::onSessionDoubleClicked(const DXSessionConfig &config) {
     settings.protocol = config.protocol;
     settings.model = config.model;
     settings.codePage = config.codePage;
+    settings.customFastPaths = config.customFastPaths;
 
     TerminalPaneWidget *newPane = new TerminalPaneWidget(settings, this);
     m_allPanes.append(newPane);

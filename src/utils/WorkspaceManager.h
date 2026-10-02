@@ -16,6 +16,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, assign) NSInteger codePage;
 @property (nonatomic, assign) NSInteger model;
 @property (nonatomic, assign) NSInteger protocol;
+@property (nonatomic, strong) NSArray<NSDictionary *> *customFastPaths;
 
 - (NSDictionary *)toDictionary;
 + (instancetype)fromDictionary:(NSDictionary *)dict;

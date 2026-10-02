@@ -12,12 +12,13 @@
         _codePage = 0; // CP037
         _model = 0;    // Model2
         _protocol = 0; // TN3270
+        _customFastPaths = @[]; // Inizializzazione del nuovo array
     }
     return self;
 }
 
 - (NSDictionary *)toDictionary {
-    return @{
+    NSMutableDictionary *dict = [@{
         @"name": self.name ?: @"",
         @"host": self.host ?: @"",
         @"port": @(self.port),
@@ -27,7 +28,14 @@
         @"codePage": @(self.codePage),
         @"model": @(self.model),
         @"protocol": @(self.protocol)
-    };
+    } mutableCopy];
+    
+    // Salva l'array dei percorsi personalizzati se esiste e non è vuoto
+    if (self.customFastPaths && self.customFastPaths.count > 0) {
+        dict[@"customFastPaths"] = self.customFastPaths;
+    }
+    
+    return dict;
 }
 
 + (instancetype)fromDictionary:(NSDictionary *)dict {
@@ -43,6 +51,13 @@
     config.codePage = [dict[@"codePage"] integerValue];
     config.model = [dict[@"model"] integerValue];
     config.protocol = [dict[@"protocol"] integerValue];
+    
+    // Carica l'array dei percorsi personalizzati
+    NSArray *paths = dict[@"customFastPaths"];
+    if ([paths isKindOfClass:[NSArray class]]) {
+        config.customFastPaths = paths;
+    }
+    
     return config;
 }
 @end

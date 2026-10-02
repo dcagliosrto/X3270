@@ -36,7 +36,7 @@
         [self.window center];
         
         // 1. Inizializza il terminale puro
-        _terminalVC = [[TerminalViewController alloc] initWithHost:host port:port useSSL:useSSL verifyCert:verifyCert caBundle:caBundle codePage:codePage model:model protocol:protocol];
+        _terminalVC = [[TerminalViewController alloc] initWithHost:host port:port useSSL:useSSL verifyCert:verifyCert caBundle:caBundle codePage:codePage model:model protocol:protocol fastPaths:nil];
         
         // 2. Inizializza la Transfer Dock dedicata a questa finestra
         _transferDockVC = [[TransferDockViewController alloc] init];
@@ -106,6 +106,10 @@
 
 - (IBAction)openDebugWindow:(id)sender {
     [_terminalVC openDebugWindow:sender];
+}
+
+- (void)toggleCommandDock:(id)sender {
+    [_terminalVC toggleCommandDock:sender];
 }
 
 @end

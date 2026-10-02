@@ -8,6 +8,7 @@
 #include <QString>
 #include "../core/TerminalModel.h"
 #include "../core/EbcdicCodec.h"
+#include "WorkspaceManager.h"
 
 // Struttura che ricalca i parametri necessari per il tuo core
 struct ConnectionSettings {
@@ -18,6 +19,7 @@ struct ConnectionSettings {
     int protocol; // 0 = TN3270, 1 = TN5250
     x3270::TerminalModel model;
     x3270::CodePage codePage;
+    QList<DXFastPath> customFastPaths;
 };
 
 class ConnectionDialog : public QDialog {

@@ -5,6 +5,17 @@
 #include <QFile>
 #include <QJsonDocument>
 
+QJsonObject DXFastPath::toJson() const {
+    QJsonObject obj;
+    obj["title"] = title;
+    obj["cmd"] = cmd;
+    return obj;
+}
+
+DXFastPath DXFastPath::fromJson(const QJsonObject &json) {
+    return {json["title"].toString(), json["cmd"].toString()};
+}
+
 QJsonObject DXSessionConfig::toJson() const {
     QJsonObject obj;
     obj["name"] = name;
@@ -16,6 +27,9 @@ QJsonObject DXSessionConfig::toJson() const {
     obj["protocol"] = protocol;
     obj["model"] = static_cast<int>(model);
     obj["codePage"] = static_cast<int>(codePage);
+    QJsonArray fpArray;
+    for (const auto &fp : customFastPaths) fpArray.append(fp.toJson());
+    if (!fpArray.isEmpty()) obj["customFastPaths"] = fpArray;
     return obj;
 }
 
@@ -30,6 +44,13 @@ DXSessionConfig DXSessionConfig::fromJson(const QJsonObject &json) {
     cfg.protocol = json["protocol"].toInt(0);
     cfg.model = static_cast<x3270::TerminalModel>(json["model"].toInt(0));
     cfg.codePage = static_cast<x3270::CodePage>(json["codePage"].toInt(0));
+    
+    if (json.contains("customFastPaths")) {
+        QJsonArray arr = json["customFastPaths"].toArray();
+        for (const auto &val : arr) {
+            cfg.customFastPaths.append(DXFastPath::fromJson(val.toObject()));
+        }
+    }
     return cfg;
 }
 

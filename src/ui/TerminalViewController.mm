@@ -68,7 +68,8 @@ static NSString * const kDX3270BroadcastOOBNotification  = @"DX3270BroadcastOOBN
                     caBundle:(NSString*)caBundle
                     codePage:(x3270::CodePage)codePage
                        model:(x3270::TerminalModel)model
-                    protocol:(x3270::TerminalProtocol)protocol {
+                    protocol:(x3270::TerminalProtocol)protocol 
+                    fastPaths:(nullable NSArray<NSDictionary *> *)fastPaths{
          
     if (self = [super initWithNibName:nil bundle:nil]) {
         _host = [host copy];
@@ -79,6 +80,7 @@ static NSString * const kDX3270BroadcastOOBNotification  = @"DX3270BroadcastOOBN
         _codePage = codePage;
         _model = model;
         _protocol = protocol;
+        _fastPaths = fastPaths;
         _isClosing = false;
         _connectionId = 0;
         
@@ -174,6 +176,7 @@ static NSString * const kDX3270BroadcastOOBNotification  = @"DX3270BroadcastOOBN
     
     self.commandDock = [[CommandDockViewController alloc] init];
     self.commandDock.delegate = self;
+    self.commandDock.fastPaths = self.fastPaths;
     
     NSStackView *terminalStack = [[NSStackView alloc] init];
     terminalStack.orientation = NSUserInterfaceLayoutOrientationVertical;
@@ -186,6 +189,8 @@ static NSString * const kDX3270BroadcastOOBNotification  = @"DX3270BroadcastOOBN
     [dockView setContentHuggingPriority:NSLayoutPriorityRequired forOrientation:NSLayoutConstraintOrientationVertical];
     [terminalStack addArrangedSubview:dockView];
     
+    [dockView.widthAnchor constraintEqualToAnchor:terminalStack.widthAnchor].active = YES;
+
     terminalStack.frame = self.view.bounds;
     terminalStack.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     [self.view addSubview:terminalStack];
@@ -606,5 +611,22 @@ static NSString * const kDX3270BroadcastOOBNotification  = @"DX3270BroadcastOOBN
         [_debugWC showWindow:sender];
         [_debugWC.window makeKeyAndOrderFront:sender];
     }
+}
+
+
+- (IBAction)toggleCommandDock:(id)sender {
+    if (!self.commandDock || !self.commandDock.view) return;
+    
+    NSView *dockView = self.commandDock.view;
+    
+    // NSStackView gestisce automaticamente il ridimensionamento del terminale 
+    // quando una delle sue view viene nascosta. Lo facciamo in modo animato!
+    [NSAnimationContext runAnimationGroup:^(NSAnimationContext *context) {
+        context.duration = 0.25;
+        context.allowsImplicitAnimation = YES;
+        dockView.animator.hidden = !dockView.isHidden;
+    } completionHandler:^{
+        [self->_termView setNeedsDisplay:YES];
+    }];
 }
 @end

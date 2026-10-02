@@ -8,6 +8,13 @@
 #include "../core/TerminalModel.h"
 #include "../core/EbcdicCodec.h"
 
+struct DXFastPath {
+    QString title;
+    QString cmd;
+    QJsonObject toJson() const;
+    static DXFastPath fromJson(const QJsonObject &json);
+};
+
 struct DXSessionConfig {
     QString name;
     QString host;
@@ -19,6 +26,8 @@ struct DXSessionConfig {
     x3270::TerminalModel model{x3270::TerminalModel::Model2};
     x3270::CodePage codePage{x3270::CodePage::CP037};
 
+    QList<DXFastPath> customFastPaths;
+    
     QJsonObject toJson() const;
     static DXSessionConfig fromJson(const QJsonObject &json);
 };

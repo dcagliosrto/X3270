@@ -4,6 +4,8 @@
 #include <QLineEdit>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QTableWidget>
+#include <QList>
 #include "WorkspaceManager.h"
 
 class SessionEditDialog : public QDialog {
@@ -16,6 +18,11 @@ public:
 private slots:
     void onSslToggled(bool checked);
     void onProtocolChanged(int index);
+
+    void onAddFastPath();
+    void onRemoveFastPath();
+    void onMoveFastPathUp();
+    void onMoveFastPathDown();
 
 private:
     void setupUi();
@@ -31,4 +38,6 @@ private:
     QComboBox *m_codePageCombo;
 
     bool m_isNew{true};
+    QTableWidget *m_fastPathsTable;
+    QList<DXFastPath> defaultFastPaths() const;
 };

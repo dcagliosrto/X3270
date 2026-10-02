@@ -13,6 +13,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 @property (nonatomic, weak) id<CommandDockDelegate> delegate;
 @property (nonatomic, copy, nullable) NSString *linkGroup;
+@property (nonatomic, strong) NSArray<NSDictionary *> *fastPaths;
 
 // Declaration required for TerminalWindowController to present the OOB Popover
 - (void)showOOBPopoverWithTitle:(NSString *)title content:(NSString *)content;

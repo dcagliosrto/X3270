@@ -149,6 +149,11 @@
     NSMenu *viewMenu = [[NSMenu alloc] initWithTitle:@"View"];
     viewMenuItem.submenu = viewMenu;
 
+    // -- Toggle Command Dock --
+    NSMenuItem *toggleDockItem = [viewMenu addItemWithTitle:@"Toggle Command Dock" action:@selector(toggleCommandDock:) keyEquivalent:@"k"];
+    toggleDockItem.keyEquivalentModifierMask = NSEventModifierFlagCommand;
+    [viewMenu addItem:[NSMenuItem separatorItem]];
+
     // Toggle Sidebar (Ctrl+Cmd+S)
     NSMenuItem *toggleSidebarItem = [viewMenu addItemWithTitle:@"Toggle Sidebar" action:@selector(toggleSidebar:) keyEquivalent:@"s"];
     toggleSidebarItem.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagControl;
@@ -311,6 +316,13 @@
     NSWindowController *activeWC = NSApp.keyWindow.windowController;
     if ([activeWC respondsToSelector:@selector(openDebugWindow:)]) {
         [activeWC performSelector:@selector(openDebugWindow:) withObject:sender];
+    }
+}
+
+- (void)toggleCommandDock:(id)sender {
+    NSWindowController *activeWC = NSApp.keyWindow.windowController;
+    if ([activeWC respondsToSelector:@selector(toggleCommandDock:)]) {
+        [activeWC performSelector:@selector(toggleCommandDock:) withObject:sender];
     }
 }
 

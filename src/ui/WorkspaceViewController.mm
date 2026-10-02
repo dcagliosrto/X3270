@@ -155,17 +155,30 @@
 #pragma mark - WorkspaceSidebarDelegate
 
 - (void)sidebarDidRequestConnectionToSession:(DXSessionConfig *)sessionConfig {
-    TerminalViewController *termVC = [[TerminalViewController alloc]
-                                      initWithHost:sessionConfig.host
-                                      port:sessionConfig.port
-                                      useSSL:sessionConfig.useSSL
-                                      verifyCert:sessionConfig.verifyCert
-                                      caBundle:sessionConfig.caBundle
-                                      codePage:(x3270::CodePage)sessionConfig.codePage
-                                      model:(x3270::TerminalModel)sessionConfig.model
-                                      protocol:(x3270::TerminalProtocol)sessionConfig.protocol];
     
-    NSString *tabTitle = sessionConfig.name.length > 0 ? sessionConfig.name : [NSString stringWithFormat:@"%@:%d", sessionConfig.host, sessionConfig.port];
+    // Fail-safe: peschiamo sempre la configurazione più fresca dal manager centrale (come fa lo split)
+    DXSessionConfig *freshConfig = sessionConfig;
+    for (DXWorkspaceGroup *g in self.workspace.groups) {
+        for (DXSessionConfig *s in g.sessions) {
+            if ([s.host isEqualToString:sessionConfig.host] && s.port == sessionConfig.port) {
+                freshConfig = s;
+                break;
+            }
+        }
+    }
+    
+    TerminalViewController *termVC = [[TerminalViewController alloc]
+                                      initWithHost:freshConfig.host
+                                      port:freshConfig.port
+                                      useSSL:freshConfig.useSSL
+                                      verifyCert:freshConfig.verifyCert
+                                      caBundle:freshConfig.caBundle
+                                      codePage:(x3270::CodePage)freshConfig.codePage
+                                      model:(x3270::TerminalModel)freshConfig.model
+                                      protocol:(x3270::TerminalProtocol)freshConfig.protocol
+                                      fastPaths:freshConfig.customFastPaths]; 
+    
+    NSString *tabTitle = freshConfig.name.length > 0 ? freshConfig.name : [NSString stringWithFormat:@"%@:%d", freshConfig.host, freshConfig.port];
     termVC.title = tabTitle;
     
     TerminalPaneViewController *newPane = [[TerminalPaneViewController alloc] initWithTerminal:termVC];
@@ -212,7 +225,8 @@
                                       caBundle:cfg.caBundle
                                       codePage:(x3270::CodePage)cfg.codePage
                                       model:(x3270::TerminalModel)cfg.model
-                                      protocol:(x3270::TerminalProtocol)cfg.protocol];
+                                      protocol:(x3270::TerminalProtocol)cfg.protocol
+                                      fastPaths:cfg.customFastPaths];
     newTerm.title = pane.terminalVC.title;
     
     TerminalPaneViewController *newPane = [[TerminalPaneViewController alloc] initWithTerminal:newTerm];

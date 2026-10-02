@@ -6,11 +6,13 @@
 #include <QPushButton>
 #include <QHBoxLayout>
 
+#include "WorkspaceManager.h"
+
 class CommandDockWidget : public QWidget {
     Q_OBJECT
 
 public:
-    explicit CommandDockWidget(QWidget *parent = nullptr);
+    explicit CommandDockWidget(const QList<DXFastPath> &fastPaths = {},QWidget *parent = nullptr);
 
     void setLinkGroup(const QString &group) { m_linkGroup = group; }
     QString linkGroup() const { return m_linkGroup; }
@@ -37,4 +39,5 @@ private:
     QPushButton *m_rulerBtn;
     QPushButton *m_timeMachineBtn;
     QString m_linkGroup;
+    QList<DXFastPath> m_fastPaths;
 };

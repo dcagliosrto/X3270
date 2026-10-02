@@ -25,7 +25,7 @@ TerminalPaneWidget::TerminalPaneWidget(const ConnectionSettings &settings, QWidg
     m_terminal = new TerminalWidget(this);
     m_terminal->setScreenBuffer(m_screen.get(), m_codec.get(), m_kbd.get());
 
-    m_commandDock = new CommandDockWidget(this);
+    m_commandDock = new CommandDockWidget(m_settings.customFastPaths,this);
 
     layout->addWidget(m_headerView);
     layout->addWidget(m_terminal, 1);
