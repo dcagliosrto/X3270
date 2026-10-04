@@ -26,12 +26,23 @@ private slots:
     void onBroadcastIspfRequested(const QString &cmd, const QString &group, TerminalPaneWidget *sender);
     void onBroadcastOobRequested(const QString &cmd, const QString &group, TerminalPaneWidget *sender);
 
+    // Application menu actions
+    void onOpenPreferences();
+    void onOpenShortcuts();
+    void onOpenConnectionDialog();
+    void onToggleCommandDock();
+    void onToggleTimeMachine();
+    // Additional actions
+    void onSaveScreenshot();
+    void onExportText();
+    void onOpenDebugMonitor();
 private:
     void setupUi();
     void setActivePane(TerminalPaneWidget *pane);
     void setRootWidget(QWidget *widget);
     void replaceWidget(QWidget *oldWidget, QWidget *newWidget);
     void checkEmptyState();
+    void setupMenuBar();
 
     QSplitter *m_mainSplitter{nullptr};
     WorkspaceSidebarWidget *m_sidebar{nullptr};

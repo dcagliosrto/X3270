@@ -239,11 +239,16 @@ if(Qt6_FOUND)
         src/qt/TerminalPaneWidget.cpp
         src/qt/CommandDockWidget.cpp
         src/qt/WorkspaceWindow.cpp
+        src/qt/PreferencesDialog.cpp
+        src/qt/ShortcutsDialog.cpp
     )
 
-    # Create an App Bundle on macOS, and a standard GUI executable on Windows
+    set(APP_ICON "resources/AppIcon.icns")
+    set_source_files_properties(${APP_ICON} PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
+
     if(APPLE)
-        add_executable(DX3270_Qt MACOSX_BUNDLE ${QT_UI_SOURCES})
+        add_executable(DX3270_Qt MACOSX_BUNDLE ${QT_UI_SOURCES} ${APP_ICON})
+        set_target_properties(DX3270_Qt PROPERTIES MACOSX_BUNDLE_ICON_FILE "AppIcon.icns")
     else()
         add_executable(DX3270_Qt WIN32 ${QT_UI_SOURCES})
     endif()

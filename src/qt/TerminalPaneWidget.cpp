@@ -165,3 +165,26 @@ void TerminalPaneWidget::startSession() {
         }
     });
 }
+
+void TerminalPaneWidget::reconnectSession() {
+    if (m_isClosing) return;
+
+    // 1. Forza la disconnessione della socket corrente
+    if (m_session) {
+        m_session->disconnect();
+    }
+
+    // 2. Attende che il thread di rete muoia in modo pulito
+    if (m_networkThread.joinable()) {
+        m_networkThread.join();
+    }
+
+    // 3. Pulisce lo schermo per rimuovere i vecchi dati
+    if (m_screen) {
+        m_screen->eraseAll();
+    }
+    m_terminal->update();
+
+    // 4. Rilancia il thread e il loop di rete!
+    startSession();
+}

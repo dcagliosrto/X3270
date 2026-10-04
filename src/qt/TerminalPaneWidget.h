@@ -32,6 +32,7 @@ public:
     const ConnectionSettings& settings() const { return m_settings; }
 
     void executeOobCommand(const QString &cmd);
+    void reconnectSession();
 
 signals:
     void paneFocused(TerminalPaneWidget *pane);
