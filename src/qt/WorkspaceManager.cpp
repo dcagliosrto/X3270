@@ -13,7 +13,10 @@ QJsonObject DXFastPath::toJson() const {
 }
 
 DXFastPath DXFastPath::fromJson(const QJsonObject &json) {
-    return {json["title"].toString(), json["cmd"].toString()};
+    DXFastPath fp;
+    fp.title = json["title"].toString();
+    fp.cmd = json["cmd"].toString();
+    return fp;
 }
 
 QJsonObject DXSessionConfig::toJson() const {

@@ -145,8 +145,11 @@ void CommandDockWidget::loadFastPaths() {
         };
     }
     
+    // Attenzione a usare il parent corretto (es. m_container o container) in cui inserisci i bottoni
+    // Recupera il container padre dal layout, oppure rendi m_container globale. 
+    // Assumendo che m_fastPathsLayout sia già associato alla UI:
     for (const auto &fp : pathsToLoad) {
-        QPushButton *btn = new QPushButton(fp.title, this); // <--- Usare "this"
+        QPushButton *btn = new QPushButton(fp.title, this); 
         btn->setProperty("cmd", fp.cmd);
         connect(btn, &QPushButton::clicked, this, &CommandDockWidget::onIspfButtonClicked);
         m_fastPathsLayout->addWidget(btn);
